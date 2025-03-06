@@ -10,13 +10,15 @@ class Trader:
         and outputs a list of orders to be sent
         """
         # Initialize the method output dict as an empty dict
+        print("traderData: " + state.traderData)
+        print("Observations: " + str(state.observations))
         result = {}
 
         # Iterate over all the keys (the available products) contained in the order dephts
         for product in state.order_depths.keys():
 
             # Check if the current product is the 'PEARLS' product, only then run the order logic
-            if product == 'PEARLS':
+            if product == 'KELP' or product == 'RAINFOREST_RESIN':
 
                 # Retrieve the Order Depth containing all the market BUY and SELL orders for PEARLS
                 order_depth: OrderDepth = state.order_depths[product]
@@ -64,4 +66,6 @@ class Trader:
                 # Return the dict of orders
                 # These possibly contain buy or sell orders for PEARLS
                 # Depending on the logic above
-        return result
+                conversions = 1
+                traderData = "SAMPLE"
+        return result, conversions, traderData
