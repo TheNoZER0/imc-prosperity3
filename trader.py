@@ -140,56 +140,195 @@ class Trader:
         for product in state.order_depths.keys():
 
             # Check if the current product is the 'PEARLS' product, only then run the order logic
-            if product == 'KELP' or product == 'RAINFOREST_RESIN':
-
-                # Retrieve the Order Depth containing all the market BUY and SELL orders for PEARLS
+            if product == 'RAINFOREST_RESIN':
                 order_depth: OrderDepth = state.order_depths[product]
-
-                # Initialize the list of Orders to be sent as an empty list
                 orders: list[Order] = []
-
-                # Define a fair value for the PEARLS.
-                # Note that this value of 1 is just a dummy value, you should likely change it!
-                acceptable_price = 1
-
-                # If statement checks if there are any SELL orders in the PEARLS market
-                if len(order_depth.sell_orders) > 0:
-
-                    # Sort all the available sell orders by their price,
-                    # and select only the sell order with the lowest price
+                
+                # Get position
+                MAX_POSITION = 20
+                position = state.position.get(product, 0)
+                
+                # Initialize or retrieve trader data
+                if not state.traderData:
+                    trader_data = {
+                        "resin_prices": [],
+                        "bb_sma": None,
+                        "bb_upper": None,
+                        "bb_lower": None,
+                        "last_signal": None  # To prevent repeated signals
+                    }
+                else:
+                    try:
+                        trader_data = json.loads(state.traderData)
+                        if "resin_prices" not in trader_data:
+                            trader_data["resin_prices"] = []
+                            trader_data["bb_sma"] = None
+                            trader_data["bb_upper"] = None
+                            trader_data["bb_lower"] = None
+                            trader_data["last_signal"] = None
+                    except:
+                        trader_data = {
+                            "resin_prices": [],
+                            "bb_sma": None,
+                            "bb_upper": None,
+                            "bb_lower": None,
+                            "last_signal": None
+                        }
+                
+                if len(order_depth.sell_orders) > 0 and len(order_depth.buy_orders) > 0:
                     best_ask = min(order_depth.sell_orders.keys())
-                    best_ask_volume = order_depth.sell_orders[best_ask]
-
-                    # Check if the lowest ask (sell order) is lower than the above defined fair value
-                    if best_ask < acceptable_price:
-
-                        # In case the lowest ask is lower than our fair value,
-                        # This presents an opportunity for us to buy cheaply
-                        # The code below therefore sends a BUY order at the price level of the ask,
-                        # with the same quantity
-                        # We expect this order to trade with the sell order
-                        logger.print("BUY", str(-best_ask_volume) + "x", best_ask)
-                        orders.append(Order(product, best_ask, -best_ask_volume))
-
-                # The below code block is similar to the one above,
-                # the difference is that it find the highest bid (buy order)
-                # If the price of the order is higher than the fair value
-                # This is an opportunity to sell at a premium
-                if len(order_depth.buy_orders) != 0:
                     best_bid = max(order_depth.buy_orders.keys())
-                    best_bid_volume = order_depth.buy_orders[best_bid]
-                    if best_bid > acceptable_price:
-                        logger.print("SELL", str(best_bid_volume) + "x", best_bid)
-                        orders.append(Order(product, best_bid, -best_bid_volume))
-
-                # Add all the above the orders to the result dict
+                    current_price = (best_ask + best_bid) / 2
+                    
+                    # Update price history
+                    trader_data["resin_prices"].append(current_price)
+                    
+                    # Keep only most recent 50 prices
+                    if len(trader_data["resin_prices"]) > 50:
+                        trader_data["resin_prices"] = trader_data["resin_prices"][-50:]
+                    
+                    # Fine-tuned Bollinger Bands strategy
+                    if len(trader_data["resin_prices"]) >= 20:
+                        window = trader_data["resin_prices"][-20:]
+                        sma = sum(window) / 20
+                        
+                        # Calculate standard deviation
+                        variance = sum((x - sma) ** 2 for x in window) / 20
+                        std_dev = variance ** 0.5
+                        
+                        # Adjusted parameters - tighter bands for more signals
+                        upper_band = sma + (1.5 * std_dev)  # Changed from 2.0 to 1.5
+                        lower_band = sma - (1.5 * std_dev)  # Changed from 2.0 to 1.5
+                        
+                        # Store values
+                        trader_data["bb_sma"] = sma
+                        trader_data["bb_upper"] = upper_band
+                        trader_data["bb_lower"] = lower_band
+                        
+                        # Dynamic position sizing - scale based on distance from bands
+                        distance_from_band = 0
+                        current_signal = None
+                        if current_price <= lower_band:
+                            current_signal = "BUY"
+                            # Calculate how far below the band we are (as percentage)
+                            distance_from_band = min(1.0, (lower_band - current_price) / std_dev)
+                        elif current_price >= upper_band:
+                            current_signal = "SELL"
+                            # Calculate how far above the band we are (as percentage)
+                            distance_from_band = min(1.0, (current_price - upper_band) / std_dev)
+                        
+                        # Only trade if signal is different from last time or None
+                        if current_signal != trader_data["last_signal"]:
+                            if current_signal == "BUY" and position < MAX_POSITION:
+                                # Scale position size based on signal strength
+                                signal_strength = 0.5 + (0.5 * distance_from_band)  # 50-100% of max position
+                                max_buy = int(MAX_POSITION * signal_strength)
+                                available_to_buy = max_buy - position
+                                ask_volume = abs(order_depth.sell_orders[best_ask])
+                                buy_qty = min(ask_volume, available_to_buy)
+                                
+                                if buy_qty > 0:
+                                    orders.append(Order(product, best_ask, buy_qty))
+                                    
+                            elif current_signal == "SELL" and position > -MAX_POSITION:
+                                # Scale position size based on signal strength
+                                signal_strength = 0.5 + (0.5 * distance_from_band)  # 50-100% of max position
+                                max_sell = int(MAX_POSITION * signal_strength)
+                                available_to_sell = position + max_sell
+                                bid_volume = abs(order_depth.buy_orders[best_bid])
+                                sell_qty = min(bid_volume, available_to_sell)
+                                
+                                if sell_qty > 0:
+                                    orders.append(Order(product, best_bid, -sell_qty))
+                        
+                        # Update the last signal
+                        trader_data["last_signal"] = current_signal
+                
+                # Update trader data in state
+                traderData = json.dumps(trader_data)
                 result[product] = orders
 
-                # Return the dict of orders
-                # These possibly contain buy or sell orders for PEARLS
-                # Depending on the logic above
+            if product == 'KELP':
+                order_depth: OrderDepth = state.order_depths[product]
+                orders: list[Order] = []
+
+                # Gather the last 20 KELP trades (example uses state.market_trades)
+                all_kelp_trades = state.market_trades.get(product, [])
+                recent_prices = [t.price for t in all_kelp_trades[-20:]]
+
+                MAX_POSITION = 20
+                position = state.position.get(product, 0)
+
+                # Fine-tuned range-based strategy
+                if len(recent_prices) >= 20:
+                    high = max(recent_prices)
+                    low = min(recent_prices)
+                    
+                    # Adjusted threshold - more sensitive to range changes
+                    threshold = (high - low) * 0.15  # Changed from 0.2 to 0.15
+                    buy_level = low + threshold
+                    sell_level = high - threshold
+                    
+                    # Trend detection - check if prices are making higher lows or lower highs
+                    is_trending_up = False
+                    is_trending_down = False
+                    
+                    # Look at recent price movement (last 5 prices)
+                    if len(recent_prices) >= 5:
+                        last_5 = recent_prices[-5:]
+                        # Check if we're making higher lows (uptrend)
+                        lows = [min(last_5[i:i+3]) for i in range(3)]
+                        is_trending_up = lows[0] < lows[1] < lows[2]
+                        # Check if we're making lower highs (downtrend)
+                        highs = [max(last_5[i:i+3]) for i in range(3)]
+                        is_trending_down = highs[0] > highs[1] > highs[2]
+                    
+                    # Only proceed if we have both buy and sell orders
+                    if len(order_depth.sell_orders) > 0 and len(order_depth.buy_orders) > 0:
+                        best_ask = min(order_depth.sell_orders.keys())
+                        best_bid = max(order_depth.buy_orders.keys())
+                        mid_price = (best_ask + best_bid) / 2
+                        
+                        # Buy if price is near the low AND we see signs of an uptrend
+                        if mid_price < buy_level and position < MAX_POSITION and (is_trending_up or mid_price < low + (threshold * 0.5)):
+                            ask_volume = abs(order_depth.sell_orders[best_ask])
+                            buy_qty = min(ask_volume, MAX_POSITION - position)
+                            if buy_qty > 0:
+                                orders.append(Order(product, best_ask, buy_qty))
+                        
+                        # Sell if price is near the high AND we see signs of a downtrend
+                        if mid_price > sell_level and position > -MAX_POSITION and (is_trending_down or mid_price > high - (threshold * 0.5)):
+                            bid_volume = abs(order_depth.buy_orders[best_bid])
+                            sell_qty = min(bid_volume, position + MAX_POSITION)
+                            if sell_qty > 0:
+                                orders.append(Order(product, best_bid, -sell_qty))
+
+                # If fewer than 20 recent trades, you can default to your existing logic or do nothing
+                else:
+                    # Fallback: your existing LOW_BOUND / HIGH_BOUND logic
+                    LOW_BOUND = 2013
+                    HIGH_BOUND = 2027
+                    if len(order_depth.sell_orders) > 0 and len(order_depth.buy_orders) > 0:
+                        best_ask = min(order_depth.sell_orders.keys())
+                        best_bid = max(order_depth.buy_orders.keys())
+                        mid_price = (best_ask + best_bid) / 2
+                        ask_volume = abs(order_depth.sell_orders[best_ask])
+                        bid_volume = abs(order_depth.buy_orders[best_bid])
+
+                        # Buy if near lower bound
+                        if mid_price <= LOW_BOUND and position < MAX_POSITION:
+                            buy_qty = min(ask_volume, MAX_POSITION - position)
+                            if buy_qty > 0:
+                                orders.append(Order(product, best_ask, buy_qty))
+
+                        # Sell if near upper bound
+                        if mid_price >= HIGH_BOUND and position > -MAX_POSITION:
+                            sell_qty = min(bid_volume, position + MAX_POSITION)
+                            if sell_qty > 0:
+                                orders.append(Order(product, best_bid, -sell_qty))
+
+                result[product] = orders
                 
         logger.flush(state, result, conversions, traderData)     
         return result, conversions, traderData
-                
-            
+
