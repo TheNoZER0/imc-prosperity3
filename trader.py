@@ -4,7 +4,7 @@ from typing import Any
 
 from datamodel import Listing, Observation, Order, OrderDepth, ProsperityEncoder, Symbol, Trade, TradingState
 
-
+## This is logger class for visualisation, dont modify
 class Logger:
     def __init__(self) -> None:
         self.logs = ""
