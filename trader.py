@@ -129,8 +129,32 @@ class Trader:
     #     'KELP': 100,
     # }
     
+    def get_best_bid(self, order_depth):
+        """
+        Returns the best bid price and its volume.
+        If there are no bid orders, returns None.
+        """
+        if order_depth.buy_orders:
+            best_bid_price = max(order_depth.buy_orders.keys())
+            best_bid_volume = order_depth.buy_orders[best_bid_price]
+            return best_bid_price, best_bid_volume
+        else:
+            return None, None
 
-    def mean_reversion_rainforesin(self, state, fair_value, threshold=1, base_order_qty=1):
+    def get_best_ask(self, order_depth):
+        """
+        Returns the best ask price and its volume.
+        If there are no ask orders, returns None.
+        """
+        if order_depth.sell_orders:
+            best_ask_price = min(order_depth.sell_orders.keys())
+            best_ask_volume = order_depth.sell_orders[best_ask_price]
+            return best_ask_price, best_ask_volume
+        else:
+            return None, None
+    
+
+    def mean_reversion_rainforesin(self, state, fair_value, threshold=6, base_order_qty=10):
         """
         Simplified mean reversion for RAINFOREST_RESIN:
         - Buys if the current mid price is below fair_value - threshold.
@@ -149,48 +173,50 @@ class Trader:
         orders = []
         product = "RAINFOREST_RESIN"
         order_depth = state.order_depths[product]
-        
-        # Sort ask orders (lowest price first) and bid orders (highest price first)
+
+        # Sort asks: lowest price first; Sort bids: highest price first
         sorted_asks = sorted(order_depth.sell_orders.items(), key=lambda x: x[0])
         sorted_bids = sorted(order_depth.buy_orders.items(), key=lambda x: x[0], reverse=True)
-        
-        # Compute current mid-price using the best bid and ask.
-        if sorted_bids and sorted_asks:
-            current_mid = 0.5 * (sorted_bids[0][0] + sorted_asks[0][0])
-        else:
-            current_mid = fair_value
 
-        # Print for debugging purposes (optional)
-        # print(f"Fair Value: {fair_value}, Current Mid: {current_mid}")
+        # Get the best ask and best bid directly from the order book
+        best_ask, ask_vol = self.get_best_ask(order_depth)
+        best_bid, bid_vol = self.get_best_bid(order_depth)
 
-        # Check for buy signal: price sufficiently below fair value
-        if current_mid < fair_value - threshold:
-            # We want to buy; traverse the ask side.
-            desired_qty = base_order_qty
-            qty_remaining = desired_qty
-            # Walk through asks: only take orders with prices that are attractive (e.g., below fair_value - threshold)
-            for price, vol in sorted_asks:
-                if price <= fair_value - threshold:
-                    trade_qty = min(vol, qty_remaining)
-                    orders.append(Order(product, price, trade_qty))  # positive quantity = buy
-                    qty_remaining -= trade_qty
-                    if qty_remaining <= 0:
-                        break
+        # Retrieve current position; default to 0 if not available
+        current_pos = state.position.get(product, 0)
+        max_limit = 10  # maximum allowed absolute position
 
-        # Check for sell signal: price sufficiently above fair value
-        elif current_mid > fair_value + threshold:
-            desired_qty = base_order_qty
-            qty_remaining = desired_qty
-            # Walk through bids: only take orders with prices that are attractive (e.g., above fair_value + threshold)
-            for price, vol in sorted_bids:
-                if price >= fair_value + threshold:
-                    trade_qty = min(vol, qty_remaining)
-                    orders.append(Order(product, price, -trade_qty))  # negative quantity = sell
-                    qty_remaining -= trade_qty
-                    if qty_remaining <= 0:
-                        break
+        # Allowed quantities for buying and selling based on the current position
+        allowed_buy_qty = max(0, max_limit - current_pos)
+        allowed_sell_qty = max(0, max_limit + current_pos)
 
-        # If neither condition holds, do not generate any orders.
+        # --- Trading Logic ---
+        # Buy signal: if the best ask is below (fair_value - threshold)
+        if best_ask is not None and best_ask < fair_value + threshold:
+            desired_qty = min(abs(current_pos) - base_order_qty, allowed_buy_qty)
+            if desired_qty > 0:
+                qty_remaining = desired_qty
+                for price, vol in sorted_asks:
+                    if price <= fair_value + threshold:
+                        trade_qty = min(vol, qty_remaining)
+                        orders.append(Order(product, price, trade_qty))  # positive quantity for buy
+                        qty_remaining -= trade_qty
+                        if qty_remaining <= 0:
+                            break
+
+        # Sell signal: if the best bid is above (fair_value + threshold)
+        elif best_bid is not None and best_bid > fair_value - threshold:
+            desired_qty = min(base_order_qty, allowed_sell_qty)
+            if desired_qty > 0:
+                qty_remaining = desired_qty
+                for price, vol in sorted_bids:
+                    if price >= fair_value - threshold:
+                        trade_qty = min(vol, qty_remaining)
+                        orders.append(Order(product, price, -trade_qty))  # negative quantity for sell
+                        qty_remaining -= trade_qty
+                        if qty_remaining <= 0:
+                            break
+
         return orders
 
 
@@ -261,7 +287,7 @@ class Trader:
                 
             if product == 'RAINFOREST_RESIN':
                 fair_value = 10000  
-                resin_orders = self.mean_reversion_rainforesin(state, fair_value, threshold=0.2, base_order_qty=1)
+                resin_orders = self.mean_reversion_rainforesin(state, fair_value, threshold=1, base_order_qty=1)
                 result["RAINFOREST_RESIN"] = resin_orders
                 conversions = 1
                 traderData = "RAINFOREST_RESIN"
