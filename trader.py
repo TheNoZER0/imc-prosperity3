@@ -111,44 +111,6 @@ class Logger:
 
 logger = Logger()
 
-
-class Product:
-    RAINFOREST_RESIN = "RAINFOREST_RESIN"
-    KELP = "KELP"
-    SQUID_INK = "SQUID_INK"
-
-PARAMS = {
-    Product.RAINFOREST_RESIN: {
-        "fair_value": 10000, 
-        "take_width": 3,
-        "clear_width": 0,
-        "disregard_edge": 1,
-        "join_edge": 2, 
-        "default_edge": 4,
-        "soft_position_limit": 10,
-    },
-    Product.KELP: {
-        "take_width": 1,
-        "clear_width": 0,
-        "prevent_adverse": True,
-        "adverse_volume": 15,
-        "reversion_beta": -0.2756,
-        "disregard_edge": 1,
-        "join_edge": 0,
-        "default_edge": 1,
-    },
-    Product.SQUID_INK: {
-        "take_width": 1,
-        "clear_width": 0,
-        "prevent_adverse": True,
-        "adverse_volume": 15,
-        "reversion_beta": -0.0087,
-        "disregard_edge": 1,
-        "join_edge": 0,
-        "default_edge": 1,
-    }
-}
-
 class Strategy:
     def __init__(self, symbol: str, limit: int) -> None:
         self.symbol = symbol
@@ -180,7 +142,8 @@ class MarketMakingStrategy(Strategy):
         super().__init__(symbol, limit)
 
         self.window = deque()
-        self.window_size = 10
+        self.window_size = {{RAINFOREST_RESIN}} # default is 10
+
 
     @abstractmethod
     def get_true_value(state: TradingState) -> int:
@@ -204,8 +167,8 @@ class MarketMakingStrategy(Strategy):
         soft_liquidate = len(self.window) == self.window_size and sum(self.window) >= self.window_size / 2 and self.window[-1]
         hard_liquidate = len(self.window) == self.window_size and all(self.window)
 
-        max_buy_price = true_value - 1 if position > self.limit * 0.5 else true_value
-        min_sell_price = true_value + 1 if position < self.limit * -0.5 else true_value
+        max_buy_price = true_value - 1 if position > self.limit * {{PARAM1}} else true_value # default is 0.5
+        min_sell_price = true_value + 1 if position < self.limit * (-1 * {{PARAM1}}) else true_value
 
         for price, volume in sell_orders:
             if to_buy > 0 and price <= max_buy_price:
