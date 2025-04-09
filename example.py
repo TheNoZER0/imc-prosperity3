@@ -144,34 +144,33 @@ class Product:
 
 PARAMS = {
     Product.RAINFOREST_RESIN: {
-        "fair_value": 10000,
-        "take_width": 1,
-        "clear_width": -0.25,
-        # for making
-        "disregard_edge": 1,  # disregards orders for joining or pennying within this value from fair
-        "join_edge": 2,  # joins orders within this edge
-        "default_edge": 4,
-        "soft_position_limit": 10,
+        "fair_value": {{resin_fair_value}},
+        "take_width": {{resin_take_width}},
+        "clear_width": {{resin_clear_width}},
+        "disregard_edge": {{resin_disregard_edge}},
+        "join_edge": {{resin_join_edge}},
+        "default_edge": {{resin_default_edge}},
+        "soft_position_limit": {{resin_soft_position_limit}},
     },
     Product.KELP: {
-        "take_width": 1,
-        "clear_width": -0.25,
+        "take_width": {{kelp_take_width}},
+        "clear_width": {{kelp_clear_width}},
         "prevent_adverse": True,
         "adverse_volume": 15,
         "reversion_beta": -0.2955,
-        "disregard_edge": 1,
-        "join_edge": 0,
-        "default_edge": 1,
+        "disregard_edge": {{kelp_disregard_edge}},
+        "join_edge": {{kelp_join_edge}},
+        "default_edge": {{kelp_default_edge}},
     },
     Product.SQUID_INK: {
-        "take_width": 1,
-        "clear_width": -0.25,
+        "take_width": {{squink_take_width}},
+        "clear_width": {{squink_clear_width}},
         "prevent_adverse": True,
         "adverse_volume": 15,
         "reversion_beta": -0.0975,
-        "disregard_edge": 1,
-        "join_edge": 0,
-        "default_edge": 1,
+        "disregard_edge": {{squink_disregard_edge}},
+        "join_edge": {{squink_join_edge}},
+        "default_edge": {{squink_default_edge}},
     }
 }
 

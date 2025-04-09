@@ -23,6 +23,14 @@ def grid_search_backtest(
     param_combinations = list(product(*grid.values()))
     param_names = list(grid.keys())
 
+    print(f"Total parameter combinations: {len(param_combinations)}")
+
+    MAX_RUNS = 1  # This is the combo limit
+    if len(param_combinations) > MAX_RUNS:
+        print(f"Too many combinations ({len(param_combinations)}), trimming to {MAX_RUNS}")
+        import random
+        param_combinations = random.sample(param_combinations, MAX_RUNS)
+
     results = []
 
     for combination in param_combinations:
@@ -50,6 +58,7 @@ def grid_search_backtest(
             temp_file.write(code)
 
         # Run the backtest
+        profit_summary_str = ""
         try:
             f = io.StringIO()
             with redirect_stdout(f):
@@ -106,14 +115,29 @@ def grid_search_backtest(
 
 # Example usage:
 grid = {
-    "PARAM1": [0.4, 0.5],
-    "RAINFOREST_RESIN": [1],
-    "SQUID_INK": [1],
-    "KELP": [1],
+    "resin_fair_value": [10000],
+    "resin_clear_width": [0],
+    "resin_take_width": [1,2,3],
+    "resin_disregard_edge": [1,2,3],
+    "resin_join_edge": [1,2,3],
+    "resin_default_edge": [1,2,3,4,5],
+    "resin_soft_position_limit": [10,11,12,13,14,15],
+
+    "kelp_take_width": [1, 2, 3],
+    "kelp_clear_width": [0],
+    "kelp_disregard_edge": [1, 2, 3],
+    "kelp_join_edge": [1, 2, 3], 
+    "kelp_default_edge": [1, 2, 3, 4],
+
+    "squink_take_width": [1, 2, 3],
+    "squink_clear_width": [0],
+    "squink_disregard_edge": [0, 1, 2],
+    "squink_join_edge": [0, 1, 2], 
+    "squink_default_edge": [1, 2, 3, 4]
 }
 
 results = grid_search_backtest(
-    algorithm_file_path=r"../trader.py",
+    algorithm_file_path=r"../example.py",
     grid=grid,
     rounds=["1"],
     data_path=None
