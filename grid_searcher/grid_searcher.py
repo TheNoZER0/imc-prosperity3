@@ -2,8 +2,9 @@ import os
 import re
 from itertools import product
 from typing import Optional
+from pathlib import Path
 
-from prosperity3bt.__main__ import run_backtest
+from prosperity3bt.__main__ import cli
 
 
 def sanitise_filename(s):
@@ -47,16 +48,16 @@ def grid_search_backtest(
         with open(temp_file_path, 'w') as temp_file:
             temp_file.write(code)
 
-        # Run the backtest
+        # Run the backtest - Convert paths to Path objects
         try:
-            profit = run_backtest(
-                algorithm_file_path=temp_file_path,
-                data_path=data_path,
-                rounds=rounds,
+            profit = cli(
+                algorithm=Path(temp_file_path),
+                days=rounds,
                 merge_pnl=True,
-                use_visualiser=False,
-                skip_output=True,
-                print_stdout=False,
+                vis=False,
+                data=Path(data_path) if data_path else None,
+                no_out=True,
+                print_output=False,
                 no_progress=True
             )
         except Exception as e:
@@ -85,7 +86,7 @@ grid = {
 results = grid_search_backtest(
     algorithm_file_path=r"../trader.py",
     grid=grid,
-    rounds=["1"],
+    rounds=["1--2", "1--1", "1-0"],  # Format: "round-day"
     data_path=None
 )
 
