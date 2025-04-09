@@ -138,20 +138,17 @@ class Logger:
 logger = Logger()
 
 class Product:
-    RAINFOREST_RESIN = "RAINFOREST_RESIN"
+    RAINFOREST_RESIN = "RAINFOREST RESIN"
     KELP = "KELP"
-    SQUID_INK = "SQUID_INK"
+    SQUID_INK = "SQUID INK"
 
-    coeff_squink = [-7514.287362514866, 8.396289600490656, -0.0018200302192571034]
-    coeff_kelp = [-3.57941403304676, 1.0039476694835787, -1.0891353395876743e-06]
 PARAMS = {
     Product.RAINFOREST_RESIN: {
-        "fair_value": 10000,
-        "take_width": 1,
+        "fair_value": 10000, 
+        "take_width": 3,
         "clear_width": 0,
-        # for making
-        "disregard_edge": 1,  # disregards orders for joining or pennying within this value from fair
-        "join_edge": 2,  # joins orders within this edge
+        "disregard_edge": 1,  
+        "join_edge": 2, 
         "default_edge": 4,
         "soft_position_limit": 10,
     },
@@ -160,7 +157,7 @@ PARAMS = {
         "clear_width": 0,
         "prevent_adverse": True,
         "adverse_volume": 15,
-        "reversion_beta": -0.2955,
+        "reversion_beta": -0.3,
         "disregard_edge": 1,
         "join_edge": 0,
         "default_edge": 1,
@@ -173,7 +170,7 @@ PARAMS = {
         "reversion_beta": -0.3,
         "disregard_edge": 1,
         "join_edge": 0,
-        "default_edge":1,
+        "default_edge": 1,
     }
 }
 
@@ -328,9 +325,11 @@ class Trader:
 
             if traderObject.get("kelp_last_price", None) != None:
                 last_price = traderObject["kelp_last_price"]
-                last_price_squared = last_price**2
-
-                fair = -3.57941403304676 + 1.0039476694835787 * last_price + -1.0891353395876743e-06 * last_price_squared 
+                last_returns = (mmmid_price - last_price) / last_price
+                pred_returns = (
+                    last_returns * self.params[Product.KELP]["reversion_beta"]
+                )
+                fair = mmmid_price + (mmmid_price * pred_returns)
             else:
                 fair = mmmid_price
             traderObject["kelp_last_price"] = mmmid_price
@@ -364,10 +363,12 @@ class Trader:
                     mmmid_price = (mm_ask + mm_bid) / 2
 
                 if traderObject.get("squid_ink_last_price", None) != None:
-                    last_price = traderObject["kelp_last_price"]
-                    last_price_squared = last_price**2
-
-                    fair = -7514.287362514866 + 8.396289600490656 * last_price + -1.0891353395876743e-06 * last_price_squared 
+                    last_price = traderObject["squid_ink_last_price"]
+                    last_returns = (mmmid_price - last_price) / last_price
+                    pred_returns = (
+                        last_returns * self.params[Product.SQUID_INK]["reversion_beta"]
+                    )
+                    fair = mmmid_price + (mmmid_price * pred_returns)
                 else:
                     fair = mmmid_price
                 traderObject["squid_ink_last_price"] = mmmid_price
@@ -424,6 +425,7 @@ class Trader:
             sell_order_volume,
         )
         return orders, buy_order_volume, sell_order_volume
+
 
     def make_orders(
         self,
@@ -587,51 +589,51 @@ class Trader:
                 kelp_take_orders + kelp_clear_orders + kelp_make_orders
             )
 
-        # if Product.SQUID_INK in self.params and Product.SQUID_INK in state.order_depths:
-        #     squink_position = (
-        #         state.position[Product.SQUID_INK]
-        #         if Product.SQUID_INK in state.position
-        #         else 0
-        #     )
-        #     squink_fair_value = self.squink_fair_value(
-        #         state.order_depths[Product.SQUID_INK], traderObject
-        #     )
-        #     squink_take_orders, buy_order_volume, sell_order_volume = (
-        #         self.take_orders(
-        #             Product.SQUID_INK,
-        #             state.order_depths[Product.SQUID_INK],
-        #             squink_fair_value,
-        #             self.params[Product.SQUID_INK]["take_width"],
-        #             squink_position,
-        #             self.params[Product.SQUID_INK]["prevent_adverse"],
-        #             self.params[Product.SQUID_INK]["adverse_volume"],
-        #         )
-        #     )
-        #     squink_clear_orders, buy_order_volume, sell_order_volume = (
-        #         self.clear_orders(
-        #             Product.SQUID_INK,
-        #             state.order_depths[Product.SQUID_INK],
-        #             squink_fair_value,
-        #             self.params[Product.SQUID_INK]["clear_width"],
-        #             squink_position,
-        #             buy_order_volume,
-        #             sell_order_volume,
-        #         )
-        #     )
-        #     squink_make_orders, _, _ = self.make_orders(
-        #         Product.SQUID_INK,
-        #         state.order_depths[Product.SQUID_INK],
-        #         squink_fair_value,
-        #         squink_position,
-        #         buy_order_volume,
-        #         sell_order_volume,
-        #         self.params[Product.SQUID_INK]["disregard_edge"],
-        #         self.params[Product.SQUID_INK]["join_edge"],
-        #         self.params[Product.SQUID_INK]["default_edge"],
-        #     )
-        #     result[Product.SQUID_INK] = (
-        #         squink_take_orders + squink_clear_orders + squink_make_orders
-        #     )
+        if Product.SQUID_INK in self.params and Product.SQUID_INK in state.order_depths:
+            squink_position = (
+                state.position[Product.SQUID_INK]
+                if Product.SQUID_INK in state.position
+                else 0
+            )
+            squink_fair_value = self.squink_fair_value(
+                state.order_depths[Product.SQUID_INK], traderObject
+            )
+            squink_take_orders, buy_order_volume, sell_order_volume = (
+                self.take_orders(
+                    Product.SQUID_INK,
+                    state.order_depths[Product.SQUID_INK],
+                    squink_fair_value,
+                    self.params[Product.SQUID_INK]["take_width"],
+                    squink_position,
+                    self.params[Product.SQUID_INK]["prevent_adverse"],
+                    self.params[Product.SQUID_INK]["adverse_volume"],
+                )
+            )
+            squink_clear_orders, buy_order_volume, sell_order_volume = (
+                self.clear_orders(
+                    Product.SQUID_INK,
+                    state.order_depths[Product.SQUID_INK],
+                    squink_fair_value,
+                    self.params[Product.SQUID_INK]["clear_width"],
+                    squink_position,
+                    buy_order_volume,
+                    sell_order_volume,
+                )
+            )
+            squink_make_orders, _, _ = self.make_orders(
+                Product.SQUID_INK,
+                state.order_depths[Product.SQUID_INK],
+                squink_fair_value,
+                squink_position,
+                buy_order_volume,
+                sell_order_volume,
+                self.params[Product.SQUID_INK]["disregard_edge"],
+                self.params[Product.SQUID_INK]["join_edge"],
+                self.params[Product.SQUID_INK]["default_edge"],
+            )
+            result[Product.SQUID_INK] = (
+                squink_take_orders + squink_clear_orders + squink_make_orders
+            )
 
         conversions = 1
         traderData = jsonpickle.encode(traderObject)
