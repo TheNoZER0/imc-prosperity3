@@ -2,8 +2,8 @@ import os
 import re
 from itertools import product
 from typing import Optional
-
-from prosperity3bt.__main__ import run_backtest
+from pathlib import Path
+from prosperity3bt.__main__ import cli
 
 
 def sanitise_filename(s):
@@ -49,16 +49,21 @@ def grid_search_backtest(
 
         # Run the backtest
         try:
-            profit = run_backtest(
-                algorithm_file_path=temp_file_path,
-                data_path=data_path,
-                rounds=rounds,
+            cli(
+                algorithm=Path(temp_file_path),
+                days=rounds,
                 merge_pnl=True,
-                use_visualiser=False,
-                skip_output=True,
-                print_stdout=False,
-                no_progress=True
+                vis=False,
+                out=None,
+                no_out=True,
+                data=Path(data_path) if data_path else None,
+                print_output=False,
+                match_trades="all",
+                no_progress=True,
+                original_timestamps=False,
+                version=False
             )
+            profit = None
         except Exception as e:
             print(f"Backtest failed for {params}: {e}")
             profit = None
