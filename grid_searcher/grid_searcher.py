@@ -4,6 +4,8 @@ from itertools import product
 from typing import Optional
 from pathlib import Path
 from prosperity3bt.__main__ import cli
+import io
+from contextlib import redirect_stdout
 
 
 def sanitise_filename(s):
@@ -49,21 +51,43 @@ def grid_search_backtest(
 
         # Run the backtest
         try:
-            cli(
-                algorithm=Path(temp_file_path),
-                days=rounds,
-                merge_pnl=True,
-                vis=False,
-                out=None,
-                no_out=True,
-                data=Path(data_path) if data_path else None,
-                print_output=False,
-                match_trades="all",
-                no_progress=True,
-                original_timestamps=False,
-                version=False
-            )
+            f = io.StringIO()
+            with redirect_stdout(f):
+                cli(
+                    algorithm=Path(temp_file_path),
+                    days=rounds,
+                    merge_pnl=True,
+                    vis=False,
+                    out=None,
+                    no_out=True,
+                    data=Path(data_path) if data_path else None,
+                    print_output=False,
+                    match_trades="all",
+                    no_progress=True,
+                    original_timestamps=False,
+                    version=False
+                )
+            output = f.getvalue()
+
             profit = None
+            summary_lines = []
+            found_summary = False
+
+            for line in output.splitlines():
+                if "Profit summary:" in line:
+                    found_summary = True
+                if found_summary:
+                    summary_lines.append(line)
+                if found_summary and "Total profit:" in line:
+                    try:
+                        profit = float(line.split("Total profit:")[-1].replace(",", "").strip())
+                    except:
+                        profit = None
+                    break
+
+            profit_summary_str = "\n".join(summary_lines)
+
+
         except Exception as e:
             print(f"Backtest failed for {params}: {e}")
             profit = None
@@ -71,7 +95,8 @@ def grid_search_backtest(
         # Save the result
         results.append({
             "params": params,
-            "profit": profit
+            "profit": profit,
+            "summary": profit_summary_str
         })
 
         # Clean up the temp file
@@ -97,4 +122,6 @@ results = grid_search_backtest(
 # Print results
 print(f"\n\n\nResults for grid search:")
 for result in results:
-    print(f"Parameters: {result['params']} | Profit: {result['profit']}")
+    print(f"Parameters: {result['params']}")
+    print(f"{result['summary']}")
+    print("-" * 40)
