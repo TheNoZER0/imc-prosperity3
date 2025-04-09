@@ -153,6 +153,7 @@ PARAMS = {
         "soft_position_limit": {{resin_soft_position_limit}},
     },
     Product.KELP: {
+        "fair_value": {{kelp_fair_value}},
         "take_width": {{kelp_take_width}},
         "clear_width": {{kelp_clear_width}},
         "prevent_adverse": True,
@@ -163,6 +164,7 @@ PARAMS = {
         "default_edge": {{kelp_default_edge}},
     },
     Product.SQUID_INK: {
+        "fair_value": {{squink_fair_value}},
         "take_width": {{squink_take_width}},
         "clear_width": {{squink_clear_width}},
         "prevent_adverse": True,

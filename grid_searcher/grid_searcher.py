@@ -123,18 +123,21 @@ grid = {
     "resin_default_edge": [1,2,3,4,5],
     "resin_soft_position_limit": [10,11,12,13,14,15],
 
+    "kelp_fair_value": [10000],
     "kelp_take_width": [1, 2, 3],
     "kelp_clear_width": [0],
     "kelp_disregard_edge": [1, 2, 3],
     "kelp_join_edge": [1, 2, 3], 
     "kelp_default_edge": [1, 2, 3, 4],
-
+    
+    "squink_fair_value": [10000],
     "squink_take_width": [1, 2, 3],
     "squink_clear_width": [0],
     "squink_disregard_edge": [0, 1, 2],
     "squink_join_edge": [0, 1, 2], 
     "squink_default_edge": [1, 2, 3, 4]
 }
+
 
 results = grid_search_backtest(
     algorithm_file_path=r"../example.py",
