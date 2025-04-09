@@ -144,7 +144,6 @@ class Product:
 
 PARAMS = {
     Product.RAINFOREST_RESIN: {
-        "fair_value": {{resin_fair_value}},
         "take_width": {{resin_take_width}},
         "clear_width": {{resin_clear_width}},
         "disregard_edge": {{resin_disregard_edge}},
@@ -153,7 +152,6 @@ PARAMS = {
         "soft_position_limit": {{resin_soft_position_limit}},
     },
     Product.KELP: {
-        "fair_value": {{kelp_fair_value}},
         "take_width": {{kelp_take_width}},
         "clear_width": {{kelp_clear_width}},
         "prevent_adverse": True,
@@ -164,7 +162,6 @@ PARAMS = {
         "default_edge": {{kelp_default_edge}},
     },
     Product.SQUID_INK: {
-        "fair_value": {{squink_fair_value}},
         "take_width": {{squink_take_width}},
         "clear_width": {{squink_clear_width}},
         "prevent_adverse": True,
