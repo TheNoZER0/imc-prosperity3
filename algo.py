@@ -248,7 +248,7 @@ class Trader:
     def run(self, state: TradingState) -> tuple[dict[Symbol, list[Order]], int, str]:
         result = {symbol: [] for symbol in [CROISSANTS, JAMS, DJEMBES, PICNIC_BASKET1, PICNIC_BASKET2]}
         conversions = 0
-        trader_data = "Advanced Strategy: Adaptive MM + Deviation-Scaled Arbitrage with Risk Adjustments"
+        trader_data = "Adaptive MM + Deviation Scaled Arbitrage w/ some typa Risk Adjustments"
 
         arb_orders = arbitrage_strategy(state, base_qty=MAX_BASE_QTY)
         for o in arb_orders:
