@@ -23,9 +23,9 @@ import pandas as pd
 import numpy as np
 
 # --- Configuration (update these paths and parameters as needed) ---
-ORDERBOOK_CSV = "data/round1/prices_round_1_day_-1.csv"  # Path to your orderbook (prices) dataset
-TRADES_CSV = "data/round1/trades_round_1_day_-1.csv"       # Path to your trades dataset
-PRODUCT = "SQUID_INK"              # Product to estimate (e.g. "KELP" or "SQUID_INK")
+ORDERBOOK_CSV = "data/round2/basket/prices_round_2_day_-1.csv"  # Path to your orderbook (prices) dataset
+TRADES_CSV = "data/round2/basket/trades_round_2_day_-1.csv"       # Path to your trades dataset
+PRODUCT = "JAMS"              # Product to estimate (e.g. "KELP" or "SQUID_INK")
 EMA_SPAN = 15                 # Span used in EMA smoothing
 
 # --- Data Loading Functions ---
