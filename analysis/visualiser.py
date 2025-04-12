@@ -313,6 +313,52 @@ def plot_pnl(df, product):
     plt.tight_layout()
     return fig
 
+def get_vwap_for_row(row):
+    """
+    Compute the volume weighted average price (VWAP) for a given row of order book data
+    by iterating through levels 1 to 3 for both bid and ask sides.
+    
+    For each side, we sum (price * volume) over all levels (ignoring NaNs)
+    and then divide by the total volume across all levels.
+    The overall VWAP is computed as the weighted average of both sides.
+    """
+    bid_total_value = 0.0
+    bid_total_volume = 0.0
+    for i in range(1, 4):
+        price = row.get(f'bid_price_{i}', np.nan)
+        volume = row.get(f'bid_volume_{i}', np.nan)
+        if not pd.isna(price) and not pd.isna(volume):
+            bid_total_value += price * volume
+            bid_total_volume += volume
+
+    ask_total_value = 0.0
+    ask_total_volume = 0.0
+    for i in range(1, 4):
+        price = row.get(f'ask_price_{i}', np.nan)
+        volume = row.get(f'ask_volume_{i}', np.nan)
+        if not pd.isna(price) and not pd.isna(volume):
+            ask_total_value += price * volume
+            ask_total_volume += volume
+
+    total_value = bid_total_value + ask_total_value
+    total_volume = bid_total_volume + ask_total_volume
+    if total_volume == 0:
+        return np.nan
+    return total_value / total_volume
+
+def get_vwap_series(df, product):
+    """
+    Filters the DataFrame for a given product, computes the VWAP for each row 
+    (using all bid/ask levels 1-3), and returns a Series indexed by a combined time key.
+    """
+    sub = df[df['product'] == product].copy()
+    # Compute VWAP for each row using our custom function
+    sub['vwap'] = sub.apply(get_vwap_for_row, axis=1)
+    # Create a combined time key (e.g., "day-timestamp")
+    sub['time'] = sub['day'].astype(str) + '-' + sub['timestamp'].astype(str)
+    sub = sub.sort_values(['day', 'timestamp']).set_index('time')
+    return sub['vwap']
+
 # ---------------------------------------
 # Statistical Test Plot / Output Functions
 # ---------------------------------------
@@ -374,9 +420,9 @@ def main():
     orders_df['spread'] = orders_df.apply(calculate_spread, axis=1)
     
     # Extract mid-price series for components and baskets
-    mid_CROISSANTS   = get_mid_price_series(orders_df, 'CROISSANTS')
-    mid_JAMS         = get_mid_price_series(orders_df, 'JAMS')
-    mid_DJEMBES      = get_mid_price_series(orders_df, 'DJEMBES')
+    mid_CROISSANTS   = get_vwap_series(orders_df, 'CROISSANTS')
+    mid_JAMS         = get_vwap_series(orders_df, 'JAMS')
+    mid_DJEMBES      = get_vwap_series(orders_df, 'DJEMBES')
     mid_PICNIC_BASKET1 = get_mid_price_series(orders_df, 'PICNIC_BASKET1')
     mid_PICNIC_BASKET2 = get_mid_price_series(orders_df, 'PICNIC_BASKET2')
     
