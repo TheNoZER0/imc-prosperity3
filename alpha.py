@@ -36,135 +36,147 @@ EMA_PERIOD = 10
 Z_THRESHOLD = 1.5
 
 mid_price_history = {sym: [] for sym in [CROISSANTS, JAMS, DJEMBES, PICNIC_BASKET1, PICNIC_BASKET2]}
-# ----- Helper Functions for Round 2 -----
-def update_mid_price_history(state: TradingState, symbol: str) -> list[float]:
-    mid = get_mid_price(state, symbol)
-    hist = mid_price_history[symbol]
-    hist.append(mid)
-    if len(hist) > VOL_WINDOW:
-        hist.pop(0)
-    return hist
+
+class Strategy_R2:
+
+    def __init__(self, state: TradingState):
+        # Save the provided state so that instance methods can reference it.
+        self.state = state
+        # Initialize the mid-price history dictionary for each asset.
+        self.mid_price_history = {
+            CROISSANTS: [],
+            JAMS: [],
+            DJEMBES: [],
+            PICNIC_BASKET1: [],
+            PICNIC_BASKET2: []
+        }
+
+    def get_mid_price(state: TradingState, symbol: str) -> float:
+        od = state.order_depths[symbol]
+        best_bid = max(od.buy_orders.keys()) if od.buy_orders else 0
+        best_ask = min(od.sell_orders.keys()) if od.sell_orders else (best_bid + 1)
+        return (best_bid + best_ask) / 2
+
+    def update_mid_price_history(state: TradingState, symbol: str) -> list[float]:
+        mid = Strategy_R2.get_mid_price(state, symbol)
+        hist = mid_price_history[symbol]
+        hist.append(mid)
+        if len(hist) > VOL_WINDOW:
+            hist.pop(0)
+        return hist
 
 
-def estimate_volatility(prices: list[float]) -> float:
-    return np.std(prices) if len(prices) >= 2 else 0
+    def estimate_volatility(prices: list[float]) -> float:
+        return np.std(prices) if len(prices) >= 2 else 0
+    
+    def theoretical_basket1_price(croissant_price: float, jam_price: float, djembe_price: float) -> float:
+        return 6 * croissant_price + 3 * jam_price + djembe_price
 
 
-def get_mid_price(state: TradingState, symbol: str) -> float:
-    od = state.order_depths[symbol]
-    best_bid = max(od.buy_orders.keys()) if od.buy_orders else 0
-    best_ask = min(od.sell_orders.keys()) if od.sell_orders else (best_bid + 1)
-    return (best_bid + best_ask) / 2
+    def theoretical_basket2_price(croissant_price: float, jam_price: float) -> float:
+        return 4 * croissant_price + 2 * jam_price
 
 
-def theoretical_basket1_price(croissant_price: float, jam_price: float, djembe_price: float) -> float:
-    return 6 * croissant_price + 3 * jam_price + djembe_price
+    def arbitrage_strategy(state: TradingState, base_qty: int = MAX_BASE_QTY) -> list[Order]:
+        orders = []
+        croissant_mid = Strategy_R2.get_mid_price(state, CROISSANTS)
+        jam_mid = Strategy_R2.get_mid_price(state, JAMS)
+        djembe_mid = Strategy_R2.get_mid_price(state, DJEMBES)
+
+        basket1_theoretical = Strategy_R2.theoretical_basket1_price(croissant_mid, jam_mid, djembe_mid)
+        basket2_theoretical = Strategy_R2.theoretical_basket2_price(croissant_mid, jam_mid)
+
+        basket1_mid = Strategy_R2.get_mid_price(state, PICNIC_BASKET1)
+        basket2_mid = Strategy_R2.get_mid_price(state, PICNIC_BASKET2)
+
+        # Basket 1 Arbitrage
+        diff1 = abs(basket1_theoretical - basket1_mid)
+        if diff1 >= MIN_ARB_DIFF:
+            qty1 = min(base_qty, POSITION_LIMITS[PICNIC_BASKET1] - state.position.get(PICNIC_BASKET1, 0))
+            scale = SCALING_FACTOR * (diff1 / basket1_mid)
+            adjusted_qty = max(1, int(qty1 * scale))
+            if basket1_theoretical < basket1_mid:
+                orders.append(Order(PICNIC_BASKET1, int(basket1_mid), -adjusted_qty))
+                orders.append(Order(CROISSANTS, int(croissant_mid), 6 * adjusted_qty))
+                orders.append(Order(JAMS, int(jam_mid), 3 * adjusted_qty))
+                orders.append(Order(DJEMBES, int(djembe_mid), adjusted_qty))
+            else:
+                orders.append(Order(PICNIC_BASKET1, int(basket1_mid), adjusted_qty))
+                orders.append(Order(CROISSANTS, int(croissant_mid), -6 * adjusted_qty))
+                orders.append(Order(JAMS, int(jam_mid), -3 * adjusted_qty))
+                orders.append(Order(DJEMBES, int(djembe_mid), -adjusted_qty))
+
+        # Basket 2 Arbitrage
+        diff2 = abs(basket2_theoretical - basket2_mid)
+        if diff2 >= MIN_ARB_DIFF:
+            qty2 = min(base_qty, POSITION_LIMITS[PICNIC_BASKET2] - state.position.get(PICNIC_BASKET2, 0))
+            scale = SCALING_FACTOR * (diff2 / basket2_mid)
+            adjusted_qty2 = max(1, int(qty2 * scale))
+            if basket2_theoretical < basket2_mid:
+                orders.append(Order(PICNIC_BASKET2, int(basket2_mid), -adjusted_qty2))
+                orders.append(Order(CROISSANTS, int(croissant_mid), 4 * adjusted_qty2))
+                orders.append(Order(JAMS, int(jam_mid), 2 * adjusted_qty2))
+            else:
+                orders.append(Order(PICNIC_BASKET2, int(basket2_mid), adjusted_qty2))
+                orders.append(Order(CROISSANTS, int(croissant_mid), -4 * adjusted_qty2))
+                orders.append(Order(JAMS, int(jam_mid), -2 * adjusted_qty2))
+
+        return orders
 
 
-def theoretical_basket2_price(croissant_price: float, jam_price: float) -> float:
-    return 4 * croissant_price + 2 * jam_price
+    def advanced_market_making_strategy(state: TradingState, symbol: str, base_order_size: int = 10) -> list[Order]:
+        orders = []
+        fair_price = Strategy_R2.get_mid_price(state, symbol)
+        hist = Strategy_R2.update_mid_price_history(state, symbol)
+        vol = Strategy_R2.estimate_volatility(hist)
+        tick_offset = BASE_TICK + int(VOL_SCALE * vol)
+
+        od = state.order_depths[symbol]
+        best_bid = max(od.buy_orders.keys()) if od.buy_orders else fair_price - tick_offset
+        best_ask = min(od.sell_orders.keys()) if od.sell_orders else fair_price + tick_offset
+        buy_price = min(int(fair_price), best_bid + tick_offset)
+        sell_price = max(int(fair_price), best_ask - tick_offset)
+
+        current_pos = state.position.get(symbol, 0)
+        risk_adjusted_size = max(1, int(base_order_size * (1 - abs(current_pos) / POSITION_LIMITS[symbol])))
+
+        if current_pos < POSITION_LIMITS[symbol]:
+            orders.append(Order(symbol, buy_price, risk_adjusted_size))
+        if current_pos > -POSITION_LIMITS[symbol]:
+            orders.append(Order(symbol, sell_price, -risk_adjusted_size))
+
+        return orders
 
 
-def arbitrage_strategy(state: TradingState, base_qty: int = MAX_BASE_QTY) -> list[Order]:
-    orders = []
-    croissant_mid = get_mid_price(state, CROISSANTS)
-    jam_mid = get_mid_price(state, JAMS)
-    djembe_mid = get_mid_price(state, DJEMBES)
-
-    basket1_theoretical = theoretical_basket1_price(croissant_mid, jam_mid, djembe_mid)
-    basket2_theoretical = theoretical_basket2_price(croissant_mid, jam_mid)
-
-    basket1_mid = get_mid_price(state, PICNIC_BASKET1)
-    basket2_mid = get_mid_price(state, PICNIC_BASKET2)
-
-    # Basket 1 Arbitrage
-    diff1 = abs(basket1_theoretical - basket1_mid)
-    if diff1 >= MIN_ARB_DIFF:
-        qty1 = min(base_qty, POSITION_LIMITS[PICNIC_BASKET1] - state.position.get(PICNIC_BASKET1, 0))
-        scale = SCALING_FACTOR * (diff1 / basket1_mid)
-        adjusted_qty = max(1, int(qty1 * scale))
-        if basket1_theoretical < basket1_mid:
-            orders.append(Order(PICNIC_BASKET1, int(basket1_mid), -adjusted_qty))
-            orders.append(Order(CROISSANTS, int(croissant_mid), 6 * adjusted_qty))
-            orders.append(Order(JAMS, int(jam_mid), 3 * adjusted_qty))
-            orders.append(Order(DJEMBES, int(djembe_mid), adjusted_qty))
-        else:
-            orders.append(Order(PICNIC_BASKET1, int(basket1_mid), adjusted_qty))
-            orders.append(Order(CROISSANTS, int(croissant_mid), -6 * adjusted_qty))
-            orders.append(Order(JAMS, int(jam_mid), -3 * adjusted_qty))
-            orders.append(Order(DJEMBES, int(djembe_mid), -adjusted_qty))
-
-    # Basket 2 Arbitrage
-    diff2 = abs(basket2_theoretical - basket2_mid)
-    if diff2 >= MIN_ARB_DIFF:
-        qty2 = min(base_qty, POSITION_LIMITS[PICNIC_BASKET2] - state.position.get(PICNIC_BASKET2, 0))
-        scale = SCALING_FACTOR * (diff2 / basket2_mid)
-        adjusted_qty2 = max(1, int(qty2 * scale))
-        if basket2_theoretical < basket2_mid:
-            orders.append(Order(PICNIC_BASKET2, int(basket2_mid), -adjusted_qty2))
-            orders.append(Order(CROISSANTS, int(croissant_mid), 4 * adjusted_qty2))
-            orders.append(Order(JAMS, int(jam_mid), 2 * adjusted_qty2))
-        else:
-            orders.append(Order(PICNIC_BASKET2, int(basket2_mid), adjusted_qty2))
-            orders.append(Order(CROISSANTS, int(croissant_mid), -4 * adjusted_qty2))
-            orders.append(Order(JAMS, int(jam_mid), -2 * adjusted_qty2))
-
-    return orders
+    def compute_ema(prices: list[float], period: int) -> float:
+        if not prices:
+            return 0
+        alpha = 2 / (period + 1)
+        ema = prices[0]
+        for price in prices[1:]:
+            ema = alpha * price + (1 - alpha) * ema
+        return ema
 
 
-def advanced_market_making_strategy(state: TradingState, symbol: str, base_order_size: int = 10) -> list[Order]:
-    orders = []
-    fair_price = get_mid_price(state, symbol)
-    hist = update_mid_price_history(state, symbol)
-    vol = estimate_volatility(hist)
-    tick_offset = BASE_TICK + int(VOL_SCALE * vol)
+    def ema_strategy(state: TradingState, symbol: str, period: int = EMA_PERIOD, z_threshold: float = Z_THRESHOLD) -> list[Order]:
+        """Generate orders based on an EMA mean-reversion signal when the market is quiet."""
+        hist = Strategy_R2.update_mid_price_history(state, symbol)
+        if len(hist) < period:
+            return []
+        ema_val = Strategy_R2.compute_ema(hist, period)
+        std = np.std(hist) if len(hist) > 1 else 0
+        current = hist[-1]
+        z = (current - ema_val) / std if std != 0 else 0
 
-    od = state.order_depths[symbol]
-    best_bid = max(od.buy_orders.keys()) if od.buy_orders else fair_price - tick_offset
-    best_ask = min(od.sell_orders.keys()) if od.sell_orders else fair_price + tick_offset
-    buy_price = min(int(fair_price), best_bid + tick_offset)
-    sell_price = max(int(fair_price), best_ask - tick_offset)
-
-    current_pos = state.position.get(symbol, 0)
-    risk_adjusted_size = max(1, int(base_order_size * (1 - abs(current_pos) / POSITION_LIMITS[symbol])))
-
-    if current_pos < POSITION_LIMITS[symbol]:
-        orders.append(Order(symbol, buy_price, risk_adjusted_size))
-    if current_pos > -POSITION_LIMITS[symbol]:
-        orders.append(Order(symbol, sell_price, -risk_adjusted_size))
-
-    return orders
-
-
-def compute_ema(prices: list[float], period: int) -> float:
-    if not prices:
-        return 0
-    alpha = 2 / (period + 1)
-    ema = prices[0]
-    for price in prices[1:]:
-        ema = alpha * price + (1 - alpha) * ema
-    return ema
-
-
-def ema_strategy(state: TradingState, symbol: str, period: int = EMA_PERIOD, z_threshold: float = Z_THRESHOLD) -> list[Order]:
-    """Generate orders based on an EMA mean-reversion signal when the market is quiet."""
-    hist = update_mid_price_history(state, symbol)
-    if len(hist) < period:
-        return []
-    ema_val = compute_ema(hist, period)
-    std = np.std(hist) if len(hist) > 1 else 0
-    current = hist[-1]
-    z = (current - ema_val) / std if std != 0 else 0
-
-    orders = []
-    # If |z| is below threshold, issue a minimal order to capture mean reversion.
-    if abs(z) < z_threshold:
-        # If current price is below EMA, suggest a small buy; if above, a small sell.
-        if current < ema_val:
-            orders.append(Order(symbol, int(current), 1))
-        elif current > ema_val:
-            orders.append(Order(symbol, int(current), -1))
-    return orders
+        orders = []
+        # If |z| is below threshold, issue a minimal order to capture mean reversion.
+        if abs(z) < z_threshold:
+            # If current price is below EMA, suggest a small buy; if above, a small sell.
+            if current < ema_val:
+                orders.append(Order(symbol, int(current), 1))
+            elif current > ema_val:
+                orders.append(Order(symbol, int(current), -1))
+        return orders
 
 
 
@@ -928,10 +940,10 @@ class Trader:
         # ----- Run Round 2 Strategy -----
         result_round2 = {symbol: [] for symbol in [CROISSANTS, JAMS, DJEMBES, PICNIC_BASKET1, PICNIC_BASKET2]}
         # Update mid-price history for PICNIC_BASKET1.
-        hist = update_mid_price_history(state, PICNIC_BASKET1)
+        hist = Strategy_R2.update_mid_price_history(state, PICNIC_BASKET1)
         use_ema_strategy = False
         if len(hist) >= EMA_PERIOD:
-            ema_val = compute_ema(hist, period=EMA_PERIOD)
+            ema_val = Strategy_R2.compute_ema(hist, period=EMA_PERIOD)
             std = np.std(hist) if len(hist) > 1 else 0
             current = hist[-1]
             z = (current - ema_val) / std if std != 0 else 0
@@ -939,7 +951,7 @@ class Trader:
             # Compute the derivative of the normalised z-score over the last two intervals.
             if len(hist) >= EMA_PERIOD + 1:
                 # Normalise the last two differences.
-                prev_z = (hist[-2] - compute_ema(hist[:-1], period=EMA_PERIOD)) / (np.std(hist[:-1]) + 1e-6)
+                prev_z = (hist[-2] - Strategy_R2.compute_ema(hist[:-1], period=EMA_PERIOD)) / (np.std(hist[:-1]) + 1e-6)
                 derivative = z - prev_z
             else:
                 derivative = 0
@@ -958,17 +970,17 @@ class Trader:
                 use_ema_strategy = True
 
         if use_ema_strategy:
-            orders_r2 = ema_strategy(state, PICNIC_BASKET1, period=EMA_PERIOD, z_threshold=Z_THRESHOLD)
+            orders_r2 = Strategy_R2.ema_strategy(state, PICNIC_BASKET1, period=EMA_PERIOD, z_threshold=Z_THRESHOLD)
             for o in orders_r2:
                 result_round2.setdefault(o.symbol, []).append(o)
                 logger.print("Round2 EMA order:", o.symbol, o.price, o.quantity)
         else:
-            orders_r2 = arbitrage_strategy(state, base_qty=MAX_BASE_QTY)
+            orders_r2 = Strategy_R2.arbitrage_strategy(state, base_qty=MAX_BASE_QTY)
             for o in orders_r2:
                 result_round2.setdefault(o.symbol, []).append(o)
                 logger.print("Round2 Arb order:", o.symbol, o.price, o.quantity)
             for basket in [PICNIC_BASKET1, PICNIC_BASKET2]:
-                orders_mm = advanced_market_making_strategy(state, basket, base_order_size=10)
+                orders_mm = Strategy_R2.advanced_market_making_strategy(state, basket, base_order_size=10)
                 for o in orders_mm:
                     result_round2.setdefault(o.symbol, []).append(o)
                     logger.print("Round2 MM order for", basket, ":", o.symbol, o.price, o.quantity)
