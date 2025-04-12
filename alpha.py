@@ -5,6 +5,7 @@ import json
 from typing import Any, List, Dict
 import jsonpickle
 from datamodel import *
+import pandas as pd
 
 # =============================================================================
 #                                        ROUND 2
@@ -55,11 +56,11 @@ class Strategy_R2:
         best_ask = min(od.sell_orders.keys()) if od.sell_orders else (best_bid + 1)
         return (best_bid + best_ask) / 2
 
-    def update_mid_price_history(state: TradingState, symbol: str) -> list[float]:
+    def update_mid_price_history(state: TradingState, symbol: str, window: int = VOL_WINDOW) -> list[float]:
         mid = Strategy_R2.get_mid_price(state, symbol)
         hist = mid_price_history[symbol]
         hist.append(mid)
-        if len(hist) > VOL_WINDOW:
+        if len(hist) > window:
             hist.pop(0)
         return hist
 
@@ -940,64 +941,176 @@ logger = Logger()
 #                         Chunky Trader Class
 # =============================================================================
 
+# class Trader:
+#     def run(self, state: TradingState) -> tuple[dict[Symbol, list[Order]], int, str]:
+#         result = {}
+#         conversions = 0
+#         trader_data = "Round2 + Round1"
+        
+#         # ----- Run Round 2 Strategy -----
+#         result_round2 = {symbol: [] for symbol in [CROISSANTS, JAMS, DJEMBES, PICNIC_BASKET1, PICNIC_BASKET2]}
+#         # Update mid-price history for PICNIC_BASKET1.
+#         hist = Strategy_R2.update_mid_price_history(state, PICNIC_BASKET1)
+#         use_ema_strategy = False
+#         if len(hist) >= EMA_PERIOD:
+#             ema_val = Strategy_R2.compute_ema(hist, period=EMA_PERIOD)
+#             std = np.std(hist) if len(hist) > 1 else 0
+#             current = hist[-1]
+#             z = (current - ema_val) / std if std != 0 else 0
+
+#             # Compute the derivative of the normalised z-score over the last two intervals.
+#             if len(hist) >= EMA_PERIOD + 1:
+#                 # Normalise the last two differences.
+#                 prev_z = (hist[-2] - Strategy_R2.compute_ema(hist[:-1], period=EMA_PERIOD)) / (np.std(hist[:-1]) + 1e-6)
+#                 derivative = z - prev_z
+#             else:
+#                 derivative = 0
+
+#             # Log diagnostic information 🤓
+#             logger.print("Round2 Diagnostics:",
+#                          "EMA =", ema_val,
+#                          "std =", std,
+#                          "current =", current,
+#                          "z =", z,
+#                          "derivative =", derivative)
+
+#             # Use EMA mode if the market has a small normalised z
+#             # ORRR if the derivative has just reversed (derivative has opposite sign compared to previous derivative)
+#             if abs(z) < Z_THRESHOLD or derivative * (prev_z if 'prev_z' in locals() else 1) < 0:
+#                 use_ema_strategy = True
+
+#         if use_ema_strategy:
+#             orders_r2 = Strategy_R2.ema_strategy(state, PICNIC_BASKET1, period=EMA_PERIOD, z_threshold=Z_THRESHOLD)
+#             for o in orders_r2:
+#                 result_round2.setdefault(o.symbol, []).append(o)
+#                 logger.print("Round2 EMA order:", o.symbol, o.price, o.quantity)
+#         else:
+#             orders_r2 = Strategy_R2.arbitrage_strategy(state, base_qty=MAX_BASE_QTY)
+#             for o in orders_r2:
+#                 result_round2.setdefault(o.symbol, []).append(o)
+#                 logger.print("Round2 Arb order:", o.symbol, o.price, o.quantity)
+#             for basket in [PICNIC_BASKET1, PICNIC_BASKET2]:
+#                 orders_mm = Strategy_R2.advanced_market_making_strategy(state, basket, base_order_size=10)
+#                 for o in orders_mm:
+#                     result_round2.setdefault(o.symbol, []).append(o)
+#                     logger.print("Round2 MM order for", basket, ":", o.symbol, o.price, o.quantity)
+#         result.update(result_round2)
+
+
+#         # ----- Run Round 1 Strategy -----
+#         # For Round 1 assets: RAINFOREST_RESIN, KELP, and SQUID_INK.
+#         result_round1 = {}
+#         for asset in ["RAINFOREST_RESIN", "KELP", "SQUID_INK"]:
+#             status = Status_R1(asset)
+#             Status_R1.cls_update(state)
+#             if asset == "RAINFOREST_RESIN":
+#                 orders_r1 = Trade_R1.resin(status)
+#             elif asset == "KELP":
+#                 orders_r1 = Trade_R1.kelp(status)
+#             elif asset == "SQUID_INK":
+#                 orders_r1 = Trade_R1.squink(status)
+#             else:
+#                 orders_r1 = []
+#             result_round1[asset] = orders_r1
+#             for o in orders_r1:
+#                 logger.print("Round1 order for", asset, ":", o.symbol, o.price, o.quantity)
+#         result.update(result_round1)
+
+#         logger.flush(state, result, conversions, trader_data)
+#         return result, conversions, trader_data
+
+# Example modified Trader class for basket pairs trading based on z-score spread.
+# (Other parts of your Trader.run remain unchanged.)
+
+# Constants for basket pairs strategy; adjust these as appropriate.
+BASKET_Z_THRESHOLD = 0.5
+BASKET_WINDOW = 500    # If the z-score spread is above 0.5 (or below -0.5), take a trade.
+COINTEG_RATIO = 1.2         # Hedge ratio computed from cointegration tests (e.g., from Johansen).
+BASE_ORDER = 10             # Base order size for one side of the trade.
+ROLLING_WINDOW = 500        # Window length for the rolling z-score calculation.
+
+
 class Trader:
+    def compute_cointegration_ratio(self,basket1_series, basket2_series) -> float:
+        b1 = np.array(basket1_series)
+        b2 = np.array(basket2_series)
+        # Directly compute the ratio (if lengths are equal)
+        if b1.shape[0] != b2.shape[0] or b1.shape[0] == 0:
+            return 1.0
+        ratio = np.dot(b2, b1) / np.dot(b2, b2)
+        return ratio
+
+
+    def rolling_zscore(self,series, window):
+        rolling_mean = series.rolling(window).mean()
+        rolling_std  = series.rolling(window).std()
+        zscore = (series - rolling_mean) / rolling_std
+        return zscore
+    
+
     def run(self, state: TradingState) -> tuple[dict[Symbol, list[Order]], int, str]:
+        status_b1 = Status_R1(PICNIC_BASKET1)
+        status_b2 = Status_R1(PICNIC_BASKET2)
+        Status_R1.cls_update(state)
         result = {}
         conversions = 0
         trader_data = "Round2 + Round1"
         
-        # ----- Run Round 2 Strategy -----
+        # ----------- Round 2 Strategy -----------
         result_round2 = {symbol: [] for symbol in [CROISSANTS, JAMS, DJEMBES, PICNIC_BASKET1, PICNIC_BASKET2]}
-        # Update mid-price history for PICNIC_BASKET1.
-        hist = Strategy_R2.update_mid_price_history(state, PICNIC_BASKET1)
-        use_ema_strategy = False
-        if len(hist) >= EMA_PERIOD:
-            ema_val = Strategy_R2.compute_ema(hist, period=EMA_PERIOD)
-            std = np.std(hist) if len(hist) > 1 else 0
-            current = hist[-1]
-            z = (current - ema_val) / std if std != 0 else 0
+        
+        # Get historical mid-price data for the two baskets.
+        # (Assume Strategy_R2.update_mid_price_history(state, product) returns a pd.Series of mid-prices.)
+        hist_b1 = Strategy_R2.update_mid_price_history(state, PICNIC_BASKET1, window=ROLLING_WINDOW)
+        hist_b2 = Strategy_R2.update_mid_price_history(state, PICNIC_BASKET2, window=ROLLING_WINDOW)
+        hist_b1_array = np.array(hist_b1)
+        hist_b2_array = np.array(hist_b2)
 
-            # Compute the derivative of the normalised z-score over the last two intervals.
-            if len(hist) >= EMA_PERIOD + 1:
-                # Normalise the last two differences.
-                prev_z = (hist[-2] - Strategy_R2.compute_ema(hist[:-1], period=EMA_PERIOD)) / (np.std(hist[:-1]) + 1e-6)
-                derivative = z - prev_z
-            else:
-                derivative = 0
-
-            # Log diagnostic information 🤓
-            logger.print("Round2 Diagnostics:",
-                         "EMA =", ema_val,
-                         "std =", std,
-                         "current =", current,
-                         "z =", z,
-                         "derivative =", derivative)
-
-            # Use EMA mode if the market has a small normalised z
-            # ORRR if the derivative has just reversed (derivative has opposite sign compared to previous derivative)
-            if abs(z) < Z_THRESHOLD or derivative * (prev_z if 'prev_z' in locals() else 1) < 0:
-                use_ema_strategy = True
-
-        if use_ema_strategy:
-            orders_r2 = Strategy_R2.ema_strategy(state, PICNIC_BASKET1, period=EMA_PERIOD, z_threshold=Z_THRESHOLD)
-            for o in orders_r2:
-                result_round2.setdefault(o.symbol, []).append(o)
-                logger.print("Round2 EMA order:", o.symbol, o.price, o.quantity)
+    
+        
+        # Only proceed if we have sufficient history.
+        if len(hist_b1) >= ROLLING_WINDOW and len(hist_b2) >= ROLLING_WINDOW:
+            # Compute the cointegration (hedge) ratio using all available history.
+            cointeg_ratio = self.compute_cointegration_ratio(hist_b1, hist_b2)
+            
+            # Compute the cointegrated spread as: spread = Basket1 - (cointeg_ratio * Basket2)
+            spread_series = hist_b1_array - cointeg_ratio * hist_b2_array
+            # Convert to a pandas Series if not already one.
+            spread_pd = pd.Series(spread_series)
+            # Compute the rolling z-score.
+            z_series = self.rolling_zscore(spread_pd, window=ROLLING_WINDOW)
+            current_z = z_series.iloc[-1]
         else:
-            orders_r2 = Strategy_R2.arbitrage_strategy(state, base_qty=MAX_BASE_QTY)
-            for o in orders_r2:
+            cointeg_ratio = 1.0
+            current_z = 0.0
+        
+        # Log diagnostic information (using your logger)
+        logger.print("Basket Pairs Strategy: Cointegration Ratio =", cointeg_ratio)
+        logger.print("Basket Pairs Strategy: Current z-score spread =", current_z)
+        
+        # Trading logic based on the z-score spread:
+        if current_z > BASKET_Z_THRESHOLD:
+            # Signal: Spread is above the mean – go long Basket1 and short Basket2.
+            orders_basket = []
+            orders_basket.append(Order(PICNIC_BASKET1, price=status_b1.best_bid, quantity=-BASE_ORDER))
+            orders_basket.append(Order(PICNIC_BASKET2, price=status_b2.best_ask, quantity=-int(cointeg_ratio * BASE_ORDER)))
+            for o in orders_basket:
                 result_round2.setdefault(o.symbol, []).append(o)
-                logger.print("Round2 Arb order:", o.symbol, o.price, o.quantity)
-            for basket in [PICNIC_BASKET1, PICNIC_BASKET2]:
-                orders_mm = Strategy_R2.advanced_market_making_strategy(state, basket, base_order_size=10)
-                for o in orders_mm:
-                    result_round2.setdefault(o.symbol, []).append(o)
-                    logger.print("Round2 MM order for", basket, ":", o.symbol, o.price, o.quantity)
+                logger.print("Basket Pairs Trade Order:", o.symbol, o.price, o.quantity)
+        elif current_z < -BASKET_Z_THRESHOLD:
+            # Signal: Spread is below the mean – go long Basket2 and short Basket1.
+            orders_basket = []
+            orders_basket.append(Order(PICNIC_BASKET2, price=status_b2.best_bid, quantity=-BASE_ORDER))
+            orders_basket.append(Order(PICNIC_BASKET1, price=status_b1.best_ask, quantity=-int(cointeg_ratio * BASE_ORDER)))
+            for o in orders_basket:
+                result_round2.setdefault(o.symbol, []).append(o)
+                logger.print("Basket Pairs Trade Order:", o.symbol, o.price, o.quantity)
+        else:
+            logger.print("Basket Pairs Strategy: No trade signal (z-score spread within threshold).")
+        
         result.update(result_round2)
-
-
-        # ----- Run Round 1 Strategy -----
-        # For Round 1 assets: RAINFOREST_RESIN, KELP, and SQUID_INK.
+        
+        #----------- Round 1 Strategy (unchanged) -----------
         result_round1 = {}
         for asset in ["RAINFOREST_RESIN", "KELP", "SQUID_INK"]:
             status = Status_R1(asset)
@@ -1014,6 +1127,7 @@ class Trader:
             for o in orders_r1:
                 logger.print("Round1 order for", asset, ":", o.symbol, o.price, o.quantity)
         result.update(result_round1)
-
+        
         logger.flush(state, result, conversions, trader_data)
         return result, conversions, trader_data
+
