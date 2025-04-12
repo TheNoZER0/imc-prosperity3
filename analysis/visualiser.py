@@ -272,12 +272,10 @@ def plot_zscore_spread(df_prices, window=500):
     Produce one figure for the spread (difference) between the z-scores of PICNIC_BASKET1 and PICNIC_BASKET2.
     """
     df_plot = df_prices.copy()
-    if 'Spread_Basket1' not in df_plot.columns:
-        df_plot['Theo_Basket1'] = 6 * df_plot['Croissants'] + 3 * df_plot['Jams'] + 1 * df_plot['Djembes']
-        df_plot['Spread_Basket1'] = df_plot['Basket1'] - df_plot['Theo_Basket1']
-    if 'Spread_Basket2' not in df_plot.columns:
-        df_plot['Theo_Basket2'] = 4 * df_plot['Croissants'] + 2 * df_plot['Jams']
-        df_plot['Spread_Basket2'] = df_plot['Basket2'] - df_plot['Theo_Basket2']
+    df_plot['Theo_Basket1'] = 6 * df_plot['Croissants'] + 3 * df_plot['Jams'] + 1 * df_plot['Djembes']
+    df_plot['Spread_Basket1'] = df_plot['Basket1'] - df_plot['Theo_Basket1']
+    df_plot['Theo_Basket2'] = 4 * df_plot['Croissants'] + 2 * df_plot['Jams']
+    df_plot['Spread_Basket2'] = df_plot['Basket2'] - df_plot['Theo_Basket2']
     
     df_plot['Zscore_Basket1'] = rolling_zscore(df_plot['Spread_Basket1'], window)
     df_plot['Zscore_Basket2'] = rolling_zscore(df_plot['Spread_Basket2'], window)
