@@ -40,9 +40,7 @@ mid_price_history = {sym: [] for sym in [CROISSANTS, JAMS, DJEMBES, PICNIC_BASKE
 class Strategy_R2:
 
     def __init__(self, state: TradingState):
-        # Save the provided state so that instance methods can reference it.
         self.state = state
-        # Initialize the mid-price history dictionary for each asset.
         self.mid_price_history = {
             CROISSANTS: [],
             JAMS: [],
@@ -843,8 +841,10 @@ class Logger:
                 ]
             )
         )
+
         max_item_length = (self.max_log_length - base_length) // 3
-        self.print(
+
+        print(
             self.to_json(
                 [
                     self.compress_state(state, self.truncate(state.traderData, max_item_length)),
@@ -855,6 +855,7 @@ class Logger:
                 ]
             )
         )
+
         self.logs = ""
 
     def compress_state(self, state: TradingState, trader_data: str) -> list[Any]:
@@ -873,31 +874,35 @@ class Logger:
         compressed = []
         for listing in listings.values():
             compressed.append([listing.symbol, listing.product, listing.denomination])
+
         return compressed
 
     def compress_order_depths(self, order_depths: dict[Symbol, OrderDepth]) -> dict[Symbol, list[Any]]:
         compressed = {}
         for symbol, order_depth in order_depths.items():
             compressed[symbol] = [order_depth.buy_orders, order_depth.sell_orders]
+
         return compressed
 
     def compress_trades(self, trades: dict[Symbol, list[Trade]]) -> list[list[Any]]:
         compressed = []
         for arr in trades.values():
             for trade in arr:
-                compressed.append([
-                    trade.symbol,
-                    trade.price,
-                    trade.quantity,
-                    trade.buyer,
-                    trade.seller,
-                    trade.timestamp,
-                ])
+                compressed.append(
+                    [
+                        trade.symbol,
+                        trade.price,
+                        trade.quantity,
+                        trade.buyer,
+                        trade.seller,
+                        trade.timestamp,
+                    ]
+                )
+
         return compressed
 
     def compress_observations(self, observations: Observation) -> list[Any]:
         conversion_observations = {}
-        # For unified logging, use round2 observation fields.
         for product, observation in observations.conversionObservations.items():
             conversion_observations[product] = [
                 observation.bidPrice,
@@ -908,6 +913,7 @@ class Logger:
                 observation.sugarPrice,
                 observation.sunlightIndex,
             ]
+
         return [observations.plainValueObservations, conversion_observations]
 
     def compress_orders(self, orders: dict[Symbol, list[Order]]) -> list[list[Any]]:
@@ -915,6 +921,7 @@ class Logger:
         for arr in orders.values():
             for order in arr:
                 compressed.append([order.symbol, order.price, order.quantity])
+
         return compressed
 
     def to_json(self, value: Any) -> str:
@@ -923,7 +930,9 @@ class Logger:
     def truncate(self, value: str, max_length: int) -> str:
         if len(value) <= max_length:
             return value
+
         return value[: max_length - 3] + "..."
+
 
 logger = Logger()
 
