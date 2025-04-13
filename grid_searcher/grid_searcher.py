@@ -115,8 +115,9 @@ if __name__ == '__main__':
     
     # Example grid setup.
     grid = {
-        "threshold_b1": [i for i in range(40, 75)],
-        "threshold_b2": [i for i in range(20, 60)]
+        # "threshold_b1": [i for i in range(40, 75)],
+        # "threshold_b2": [i for i in range(20, 60)]
+        "threshold_p": [i for i in range(1,100)]
     }
     
     results = grid_search_backtest(
