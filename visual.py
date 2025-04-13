@@ -4,6 +4,7 @@ import jsonpickle
 import numpy as np
 import math
 from datamodel import *
+import pandas as pd
 
 INF = 1e9
 EMA_PERIOD = 40
@@ -808,62 +809,89 @@ class Trade:
             ema = alpha * price + (1 - alpha) * ema
         return ema
 
+    # @staticmethod
+    # def squink(state: Status) -> list[Order]:
+    #     required_points = EMA_PERIOD + 1
+    #     hist = state.hist_mid_prc(required_points)
+    #     if len(hist) < required_points:
+    #         return []
+
+    #     slow_ema = Trade.compute_ema(hist, EMA_PERIOD)
+    #     fast_period = max(2, EMA_PERIOD // 2)
+    #     fast_ema = Trade.compute_ema(hist, fast_period)
+        
+    #     macd = fast_ema - slow_ema
+
+    #     ema_previous = Trade.compute_ema(hist[:-1], EMA_PERIOD)
+    #     ema_current = Trade.compute_ema(hist[1:], EMA_PERIOD)
+    #     derivative = ema_current - ema_previous
+
+    #     sigma = np.std(hist)
+    #     current = state.mid
+    #     z = (current - slow_ema) / sigma if sigma > 0 else 0
+
+    #     min_deviation = 1.0
+    #     stop_loss_threshold = 2.5
+    #     max_position_threshold = 20
+
+    #     orders = []
+
+    #     if abs(z) >= stop_loss_threshold or abs(state.rt_position) > max_position_threshold:
+    #         minimal_qty = 1
+    #         logger.print("Stop loss condition met: z =", z, "or high position =", state.rt_position)
+    #         logger.print("Trading minimal volume:", minimal_qty)
+    #         if z > 0:
+    #             return [Order(state.product, int(current), -minimal_qty)]
+    #         else:
+    #             return [Order(state.product, int(current), minimal_qty)]
+        
+    #     if abs(z) < min_deviation:
+    #         return []
+
+    #     risk_factor = 1 / (1 + abs(derivative))
+    #     base_qty = max(1, int(MAX_BASE_QTY * risk_factor))
+        
+    #     macd_scale = 1.0 + min(0.5, abs(macd))
+    #     base_qty = int(base_qty * macd_scale)
+        
+    #     order_scale = min(1.0, abs(z) / 2)
+    #     order_qty = max(1, int(base_qty * order_scale))
+        
+    #     print("SQUID_STRAT: z =", z, "derivative =", derivative, "MACD =", macd, 
+    #         "base_qty =", base_qty, "order_qty =", order_qty)
+        
+    #     if current < slow_ema:
+    #         orders.append(Order(state.product, int(current), order_qty))
+    #     elif current > slow_ema:
+    #         orders.append(Order(state.product, int(current), -order_qty))
+        
+    #     return orders
     @staticmethod
-    def squink(state: Status) -> list[Order]:
-        required_points = EMA_PERIOD + 1
-        hist = state.hist_mid_prc(required_points)
-        if len(hist) < required_points:
-            return []
-
-        slow_ema = Trade.compute_ema(hist, EMA_PERIOD)
-        fast_period = max(2, EMA_PERIOD // 2)
-        fast_ema = Trade.compute_ema(hist, fast_period)
-        
-        macd = fast_ema - slow_ema
-
-        ema_previous = Trade.compute_ema(hist[:-1], EMA_PERIOD)
-        ema_current = Trade.compute_ema(hist[1:], EMA_PERIOD)
-        derivative = ema_current - ema_previous
-
-        sigma = np.std(hist)
-        current = state.mid
-        z = (current - slow_ema) / sigma if sigma > 0 else 0
-
-        min_deviation = 1.0
-        stop_loss_threshold = 2.5
-        max_position_threshold = 20
-
+    def ema_mean_reversion(squink: Status, alpha={{alpha_ema}}, threshold={{threshold_ema}}):
         orders = []
+        squink_prc = squink.mid  # This is a float
 
-        if abs(z) >= stop_loss_threshold or abs(state.rt_position) > max_position_threshold:
-            minimal_qty = 1
-            logger.print("Stop loss condition met: z =", z, "or high position =", state.rt_position)
-            logger.print("Trading minimal volume:", minimal_qty)
-            if z > 0:
-                return [Order(state.product, int(current), -minimal_qty)]
-            else:
-                return [Order(state.product, int(current), minimal_qty)]
+        # Ensure squink has an attribute for historical prices.
+        if not hasattr(squink, 'price_history'):
+            squink.price_history = []
+            
+        # Append the current price to the history.
+        squink.price_history.append(squink_prc)
         
-        if abs(z) < min_deviation:
-            return []
+        # Only compute the EMA if we have enough history (e.g., at least 10 data points)
+        if len(squink.price_history) < 100:
+            return orders  # or you can decide to simply return no orders
+        
+        # Convert the price history to a Pandas Series
+        price_series = pd.Series(squink.price_history)
+        
+        # Compute the EMA using Pandas' ewm method
+        ema = price_series.ewm(alpha=alpha, adjust=False).mean().iloc[-1]
 
-        risk_factor = 1 / (1 + abs(derivative))
-        base_qty = max(1, int(MAX_BASE_QTY * risk_factor))
-        
-        macd_scale = 1.0 + min(0.5, abs(macd))
-        base_qty = int(base_qty * macd_scale)
-        
-        order_scale = min(1.0, abs(z) / 2)
-        order_qty = max(1, int(base_qty * order_scale))
-        
-        print("SQUID_STRAT: z =", z, "derivative =", derivative, "MACD =", macd, 
-            "base_qty =", base_qty, "order_qty =", order_qty)
-        
-        if current < slow_ema:
-            orders.append(Order(state.product, int(current), order_qty))
-        elif current > slow_ema:
-            orders.append(Order(state.product, int(current), -order_qty))
-        
+        if squink_prc > ema + threshold:
+            orders.append(Order(squink.product, int(squink.best_bid), -int(squink.possible_sell_amt)))
+        elif squink_prc < ema - threshold:
+            orders.append(Order(squink.product, int(squink.best_ask), int(squink.possible_buy_amt)))
         return orders
     
     @staticmethod
@@ -958,7 +986,7 @@ class Trader:
         # round 1
         result["RAINFOREST_RESIN"] = Trade.resin(self.state_resin)
         result["KELP"] = Trade.kelp(self.state_kelp)
-        result["SQUID_INK"]=Trade.squink(self.state_squink)
+        result["SQUID_INK"]=Trade.ema_mean_reversion(self.state_squink)
 
         # round 2
         result["PICNIC_BASKET1"]=Trade.basket_1(self.state_picnic1, self.state_jam, self.state_djembes, self.state_croiss)
