@@ -115,7 +115,12 @@ class Status:
     _position_limit = {
         "RAINFOREST_RESIN":50,
         "KELP":50,
-        "SQUID_INK":50
+        "SQUID_INK":50,
+        "CROISSANTS":250,
+        "JAMS":250,
+        "DJEMBES":60,
+        "PICNIC_BASKET1":60,
+        "PICNIC_BASKET2":100,
     }
 
     _state = None
@@ -706,6 +711,58 @@ class Strategy:
         return orders
     
     @staticmethod
+    def index_arb(
+        basket: Status,
+        jam: Status,
+        djembes: Status,
+        croissant: Status,
+        theta=0,
+        threshold=0,
+        jam_m= 3,
+        croiss_m= 6,
+        djembe_m= 1,
+    ):
+        
+        basket_prc = basket.mid
+        underlying_prc = jam_m * jam.vwap + croiss_m * croissant.vwap + djembe_m * djembes.vwap
+        spread = basket_prc - underlying_prc
+        norm_spread = spread - theta
+
+        orders = []
+        if norm_spread > threshold:
+            orders.append(Order(basket.product, int(basket.worst_bid), -int(basket.possible_sell_amt)))
+        elif norm_spread < -threshold:
+            orders.append(Order(basket.product, int(basket.worst_ask), int(basket.possible_buy_amt)))
+
+        return orders
+    
+    @staticmethod
+    def pair_trade(croissant: Status, 
+                   djembes: Status, 
+                   pairs_mu = 1.76008613e-11, 
+                   theta = 1.03482227e+03, 
+                   sigma = 4.46392304e-03, 
+                   threshold= 20 * 4.46392304e-03/math.sqrt(2*1.03482227e+03), coint_vec= np.array([0.04234083, -0.07142774])):
+        hedge_ratio = abs(coint_vec[0] / coint_vec[1])
+
+        djembes_prc = djembes.mid
+        croissant_prc = croissant.mid
+        spread = croissant_prc - hedge_ratio * djembes_prc
+        norm_spread = spread - pairs_mu
+
+        orders = []
+        if norm_spread > threshold: # Spread is HIGH -> Croissants EXPENSIVE, Djembes CHEAP
+            # SELL EXPENSIVE (Croissant), BUY CHEAP (Djembes)
+            orders.append(Order(croissant.product, int(croissant.worst_bid), -int(croissant.possible_sell_amt))) # SELL Croissant
+            orders.append(Order(djembes.product, int(djembes.worst_ask), int(djembes.possible_buy_amt)))       # BUY Djembes
+
+        elif norm_spread < -threshold: # Spread is LOW -> Croissants CHEAP, Djembes EXPENSIVE
+            # BUY CHEAP (Croissant), SELL EXPENSIVE (Djembes)
+            orders.append(Order(croissant.product, int(croissant.worst_ask), int(croissant.possible_buy_amt)))  # BUY Croissant
+            orders.append(Order(djembes.product, int(djembes.worst_bid), -int(djembes.possible_sell_amt)))     # SELL Djembes
+        return orders
+    
+    @staticmethod
     def convert(state: Status):
         if state.position < 0:
             return -state.position
@@ -714,7 +771,6 @@ class Strategy:
         else:
             return 0
     
-
 class Trade:
     @staticmethod   
     def resin(state: Status) -> list[Order]:
@@ -749,6 +805,37 @@ class Trade:
         return orders
     
     @staticmethod
+    def jams(state: Status) -> list[Order]:
+
+        current_price = state.maxamt_midprc
+
+        orders = []
+        orders.extend(Strategy.arb(state=state, fair_price=current_price))
+        orders.extend(Strategy.mm_glft(state=state, fair_price=current_price, mu = -7.60706813499185e-07, sigma = 7.890239872766339e-05, gamma=1e-9, order_amount=50))
+
+        return orders
+    
+    @staticmethod
+    def djmb_crs_pair(state_djembes: Status, state_croiss: Status) -> List[Order]:
+        return Strategy.pair_trade(croissant=state_croiss, djembes=state_djembes)
+    
+    @staticmethod
+    def basket_1(basket: Status, jam: Status, djembes: Status, croissant: Status) -> list[Order]:
+
+        orders = []
+        orders.extend(Strategy.index_arb(basket, jam, djembes, croissant, theta = 3.65410486e-07, threshold=69*1.06727851/math.sqrt(2*1.05678874e+01), jam_m = 3, croiss_m = 6, djembe_m = 1))
+
+        return orders
+    
+    @staticmethod
+    def basket_2(basket: Status, jam: Status, djembes: Status, croissant: Status) -> list[Order]:
+
+        orders = []
+        orders.extend(Strategy.index_arb(basket, jam, djembes, croissant, theta = 1.33444695e+01, threshold=48*7.76577306e+00/math.sqrt(2*1.33444695e+01), jam_m = 2, croiss_m = 4, djembe_m = 0))
+
+        return orders
+    
+    @staticmethod
     def convert(state: Status) -> int:
         return Strategy.convert(state=state)
     
@@ -756,6 +843,11 @@ class Trader:
     state_resin= Status("RAINFOREST_RESIN")
     state_kelp= Status("KELP")
     state_squink= Status("SQUID_INK")
+    state_croiss = Status("CROISSANTS")
+    state_jam = Status("JAMS")
+    state_djembes = Status("DJEMBES")
+    state_picnic1 = Status("PICNIC_BASKET1")
+    state_picnic2 = Status("PICNIC_BASKET2")
 
     def run(self, state: TradingState) -> tuple[dict[Symbol, list[Order]], int, str]:
         Status.cls_update(state)
@@ -766,7 +858,19 @@ class Trader:
         result["RAINFOREST_RESIN"] = Trade.resin(self.state_resin)
         result["KELP"] = Trade.kelp(self.state_kelp)
         result["SQUID_INK"]=Trade.squink(self.state_squink)
-        
+
+        # round 2
+        result["PICNIC_BASKET1"]=Trade.basket_1(self.state_picnic1, self.state_jam, self.state_djembes, self.state_croiss)
+        result["JAMS"]=Trade.jams(self.state_jam)
+        result["PICNIC_BASKET2"]=Trade.basket_2(self.state_picnic2, self.state_jam, self.state_djembes, self.state_croiss)
+        pair_orders_list = Trade.djmb_crs_pair(self.state_djembes, self.state_croiss)
+
+        # for order in pair_orders_list:
+        #     symbol = order.symbol
+        #     if symbol not in result:
+        #         result[symbol] = [] 
+        #     result[symbol].append(order)
+
         conversions=1
 
         traderData = "SAMPLE" 

@@ -1023,11 +1023,11 @@ logger = Logger()
 # (Other parts of your Trader.run remain unchanged.)
 
 # Constants for basket pairs strategy; adjust these as appropriate.
-BASKET_Z_THRESHOLD = 0.5
+BASKET_Z_THRESHOLD = 0
 BASKET_WINDOW = 500    # If the z-score spread is above 0.5 (or below -0.5), take a trade.
 COINTEG_RATIO = 1.2         # Hedge ratio computed from cointegration tests (e.g., from Johansen).
-BASE_ORDER = 10             # Base order size for one side of the trade.
-ROLLING_WINDOW = 500        # Window length for the rolling z-score calculation.
+BASE_ORDER = 1            # Base order size for one side of the trade.
+ROLLING_WINDOW = 100        # Window length for the rolling z-score calculation.
 
 
 class Trader:
@@ -1092,7 +1092,7 @@ class Trader:
         if current_z > BASKET_Z_THRESHOLD:
             # Signal: Spread is above the mean – go long Basket1 and short Basket2.
             orders_basket = []
-            orders_basket.append(Order(PICNIC_BASKET1, price=status_b1.best_bid, quantity=-BASE_ORDER))
+            orders_basket.append(Order(PICNIC_BASKET1, price=status_b1.best_bid, quantity=BASE_ORDER))
             orders_basket.append(Order(PICNIC_BASKET2, price=status_b2.best_ask, quantity=-int(cointeg_ratio * BASE_ORDER)))
             for o in orders_basket:
                 result_round2.setdefault(o.symbol, []).append(o)
@@ -1100,7 +1100,7 @@ class Trader:
         elif current_z < -BASKET_Z_THRESHOLD:
             # Signal: Spread is below the mean – go long Basket2 and short Basket1.
             orders_basket = []
-            orders_basket.append(Order(PICNIC_BASKET2, price=status_b2.best_bid, quantity=-BASE_ORDER))
+            orders_basket.append(Order(PICNIC_BASKET2, price=status_b2.best_bid, quantity=BASE_ORDER))
             orders_basket.append(Order(PICNIC_BASKET1, price=status_b1.best_ask, quantity=-int(cointeg_ratio * BASE_ORDER)))
             for o in orders_basket:
                 result_round2.setdefault(o.symbol, []).append(o)
