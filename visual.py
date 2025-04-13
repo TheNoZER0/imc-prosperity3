@@ -742,7 +742,7 @@ class Strategy:
                    pairs_mu = 1.76008613e-11, 
                    theta = 1.03482227e+03, 
                    sigma = 4.46392304e-03, 
-                   threshold= 20 * 4.46392304e-03/math.sqrt(2*1.03482227e+03), coint_vec= np.array([0.04234083, -0.07142774])):
+                   threshold= 3 * 4.46392304e-03/math.sqrt(2*1.03482227e+03), coint_vec= np.array([0.04234083, -0.07142774])):
         hedge_ratio = abs(coint_vec[0] / coint_vec[1])
 
         djembes_prc = djembes.mid
@@ -831,7 +831,7 @@ class Trade:
     def basket_2(basket: Status, jam: Status, djembes: Status, croissant: Status) -> list[Order]:
 
         orders = []
-        orders.extend(Strategy.index_arb(basket, jam, djembes, croissant, theta = 1.33444695e+01, threshold=48*7.76577306e+00/math.sqrt(2*1.33444695e+01), jam_m = 2, croiss_m = 4, djembe_m = 0))
+        orders.extend(Strategy.index_arb(basket, jam, djembes, croissant, theta = 1.33444695e+01, threshold=69*7.76577306e+00/math.sqrt(2*1.33444695e+01), jam_m = 2, croiss_m = 4, djembe_m = 0))
 
         return orders
     
@@ -863,13 +863,14 @@ class Trader:
         result["PICNIC_BASKET1"]=Trade.basket_1(self.state_picnic1, self.state_jam, self.state_djembes, self.state_croiss)
         result["JAMS"]=Trade.jams(self.state_jam)
         result["PICNIC_BASKET2"]=Trade.basket_2(self.state_picnic2, self.state_jam, self.state_djembes, self.state_croiss)
+        #result[""]
         pair_orders_list = Trade.djmb_crs_pair(self.state_djembes, self.state_croiss)
 
-        # for order in pair_orders_list:
-        #     symbol = order.symbol
-        #     if symbol not in result:
-        #         result[symbol] = [] 
-        #     result[symbol].append(order)
+        for order in pair_orders_list:
+            symbol = order.symbol
+            if symbol not in result:
+                result[symbol] = [] 
+            result[symbol].append(order)
 
         conversions=1
 
