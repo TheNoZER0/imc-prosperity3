@@ -7,6 +7,7 @@ from datamodel import *
 
 INF = 1e9
 
+
 class Logger:
     def __init__(self) -> None:
         self.logs = ""
@@ -770,8 +771,13 @@ class Strategy:
             return -state.position
         else:
             return 0
-    
+
+
+
+CROISSANTS = "CROISSANTS"
+EMA_PERIOD = 13       # Window period for the EMA calculation.
 class Trade:
+    mid_price_history = {CROISSANTS: []}
     @staticmethod   
     def resin(state: Status) -> list[Order]:
 
@@ -839,6 +845,45 @@ class Trade:
     def convert(state: Status) -> int:
         return Strategy.convert(state=state)
     
+    @staticmethod
+    def croissant_ema(state: TradingState) -> list[Order]:
+        # Access the class attribute instead of a global variable.
+        status = Status(CROISSANTS)
+        Status.cls_update(state)
+        current_price = status.mid
+
+        history = Trade.mid_price_history[CROISSANTS]
+        history.append(current_price)
+        if len(history) > EMA_PERIOD:
+            history.pop(0)
+            
+        if len(history) < EMA_PERIOD:
+            return []
+        
+        alpha = 2 / (EMA_PERIOD + 1)
+        ema = history[0]
+        for price in history[1:]:
+            ema = alpha * price + (1 - alpha) * ema
+        
+        std = np.std(history)
+        z_score = (current_price - ema) / std if std > 0 else 0
+        
+        logger.print("Croissants EMA Strategy:", "Current Price =", current_price, "EMA =", ema, "Std =", std, "z =", z_score)
+        
+        orders = []
+        if z_score < -2.8:
+            qty = status.possible_buy_amt
+            orders.append(Order(CROISSANTS, int(current_price), qty))
+            logger.print("EMA Signal: BUY CROISSANTS", "Price =", current_price, "Quantity =", qty)
+        elif z_score > 2.8:
+            qty = status.possible_sell_amt
+            orders.append(Order(CROISSANTS, int(current_price), -qty))
+            logger.print("EMA Signal: SELL CROISSANTS", "Price =", current_price, "Quantity =", qty)
+        else:
+            logger.print("EMA Signal: No action (z-score within threshold).")
+            
+        return orders
+
 class Trader:
     state_resin= Status("RAINFOREST_RESIN")
     state_kelp= Status("KELP")
@@ -865,12 +910,18 @@ class Trader:
         result["PICNIC_BASKET2"]=Trade.basket_2(self.state_picnic2, self.state_jam, self.state_djembes, self.state_croiss)
         #result[""]
         pair_orders_list = Trade.djmb_crs_pair(self.state_djembes, self.state_croiss)
-
-        for order in pair_orders_list:
+        djembes_pair_orders = [order for order in pair_orders_list if order.symbol == "DJEMBES"]
+        for order in djembes_pair_orders:
             symbol = order.symbol
             if symbol not in result:
-                result[symbol] = [] 
+                result[symbol] = []
             result[symbol].append(order)
+        
+
+        ema_orders = Trade.croissant_ema(state)
+        for order in ema_orders:
+            result.setdefault(order.symbol, []).append(order)
+
 
         conversions=1
 
