@@ -742,10 +742,10 @@ class Strategy:
     @staticmethod
     def pair_trade(croissant: Status, 
                    djembes: Status, 
-                   pairs_mu = 1.76008613e-11, 
+                   pairs_mu = 267.613375701525, 
                    theta = 1.03482227e+03, 
                    sigma = 4.46392304e-03, 
-                   threshold= 3 * 4.46392304e-03/math.sqrt(2*1.03482227e+03), coint_vec= np.array([0.04234083, -0.07142774])):
+                   threshold=1 , coint_vec= np.array([0.04234083, -0.07142774])):
         hedge_ratio = abs(coint_vec[0] / coint_vec[1])
 
         djembes_prc = djembes.mid
@@ -913,15 +913,15 @@ class Trade:
     def basket_1(basket: Status, jam: Status, djembes: Status, croissant: Status) -> list[Order]:
 
         orders = []
-        orders.extend(Strategy.index_arb(basket, jam, djembes, croissant, theta = 3.65410486e-07, threshold=69*1.06727851/math.sqrt(2*1.05678874e+01), jam_m = 3, croiss_m = 6, djembe_m = 1))
+        orders.extend(Strategy.index_arb(basket, jam, djembes, croissant, theta = 3.65410486e-07, threshold=69, jam_m = 3, croiss_m = 6, djembe_m = 1))
 
         return orders
-    
+
     @staticmethod
     def basket_2(basket: Status, jam: Status, djembes: Status, croissant: Status) -> list[Order]:
 
         orders = []
-        orders.extend(Strategy.index_arb(basket, jam, djembes, croissant, theta = 1.33444695e+01, threshold=69*7.76577306e+00/math.sqrt(2*1.33444695e+01), jam_m = 2, croiss_m = 4, djembe_m = 0))
+        orders.extend(Strategy.index_arb(basket, jam, djembes, croissant, theta = 1.33444695e+01, threshold=47, jam_m = 2, croiss_m = 4, djembe_m = 0))
 
         return orders
     
