@@ -867,7 +867,7 @@ class Trade:
         
     #     return orders
     @staticmethod
-    def ema_mean_reversion(squink: Status, alpha={{alpha_ema}}, threshold={{threshold_ema}}):
+    def ema_mean_reversion(squink: Status, alpha=0.15, threshold=14):
         orders = []
         squink_prc = squink.mid  # This is a float
 
