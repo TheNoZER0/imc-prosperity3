@@ -775,8 +775,7 @@ class Strategy:
 
 
 CROISSANTS = "CROISSANTS"
-EMA_PERIOD = 20       # Window period for the EMA calculation.
-Z_THRESHOLD = 1
+EMA_PERIOD = 13       # Window period for the EMA calculation.
 class Trade:
     mid_price_history = {CROISSANTS: []}
     @staticmethod   
@@ -855,13 +854,13 @@ class Trade:
 
         history = Trade.mid_price_history[CROISSANTS]
         history.append(current_price)
-        if len(history) > {{cross_ema}}:
+        if len(history) > EMA_PERIOD:
             history.pop(0)
             
-        if len(history) < {{cross_ema}}:
+        if len(history) < EMA_PERIOD:
             return []
         
-        alpha = 2 / ({{cross_ema}} + 1)
+        alpha = 2 / (EMA_PERIOD + 1)
         ema = history[0]
         for price in history[1:]:
             ema = alpha * price + (1 - alpha) * ema
@@ -872,11 +871,11 @@ class Trade:
         logger.print("Croissants EMA Strategy:", "Current Price =", current_price, "EMA =", ema, "Std =", std, "z =", z_score)
         
         orders = []
-        if z_score < -{{cross_z}}:
+        if z_score < -2.8:
             qty = status.possible_buy_amt
             orders.append(Order(CROISSANTS, int(current_price), qty))
             logger.print("EMA Signal: BUY CROISSANTS", "Price =", current_price, "Quantity =", qty)
-        elif z_score > {{cross_z}}:
+        elif z_score > 2.8:
             qty = status.possible_sell_amt
             orders.append(Order(CROISSANTS, int(current_price), -qty))
             logger.print("EMA Signal: SELL CROISSANTS", "Price =", current_price, "Quantity =", qty)
