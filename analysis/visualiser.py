@@ -359,6 +359,106 @@ def get_vwap_series(df, product):
     sub = sub.sort_values(['day', 'timestamp']).set_index('time')
     return sub['vwap']
 
+
+
+def plot_vwap_and_spread_product(df, product):
+    """
+    Produce a figure with two subplots for a given product:
+    - Top: The volume weighted average price (VWAP).
+    - Bottom: The bid/ask spread (best ask minus best bid).
+    
+    Args:
+        df (DataFrame): DataFrame containing the order book and price data.
+        product (str): The product identifier (e.g. "RAINFOREST_RESIN").
+    
+    Returns:
+        fig: The matplotlib figure object.
+    """
+    # Extract the VWAP and the spread series using existing helper functions.
+    vwap_series = get_vwap_series(df, product)
+    spread_series = get_spread_series(df, product)
+    
+    # Create a figure with two subplots (one for VWAP, one for spread).
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
+    
+    # Plot the VWAP series.
+    ax1.plot(vwap_series.index, vwap_series, label=f'{product} VWAP', color='blue')
+    ax1.set_title(f'{product} Volume Weighted Average Price')
+    ax1.set_ylabel('VWAP')
+    ax1.legend()
+    
+    # Plot the spread series.
+    ax2.plot(spread_series.index, spread_series, label=f'{product} Bid/Ask Spread', color='red')
+    ax2.set_title(f'{product} Bid/Ask Spread')
+    ax2.set_ylabel('Spread')
+    ax2.set_xlabel('Time')
+    ax2.legend()
+    ax2.xaxis.set_major_locator(ticker.MaxNLocator(nbins=10))
+    ax2.tick_params(axis='x', rotation=45)
+    
+    plt.tight_layout()
+    return fig
+
+# Wrapper functions for the three products:
+def plot_resin_vwap_spread(df):
+    """Plot VWAP and bid/ask spread for RAINFOREST_RESIN."""
+    return plot_vwap_and_spread_product(df, "RAINFOREST_RESIN")
+
+def plot_squid_vwap_spread(df):
+    """Plot VWAP and bid/ask spread for SQUID_INK."""
+    return plot_vwap_and_spread_product(df, "SQUID_INK")
+
+def plot_kelp_vwap_spread(df):
+    """Plot VWAP and bid/ask spread for KELP."""
+    return plot_vwap_and_spread_product(df, "KELP")
+
+
+def plot_zscore_product(df, product, window=50):
+    """
+    Produce a figure that plots the rolling z-score of the product's price (VWAP)
+    relative to its rolling mean, computed over the given window.
+    
+    Args:
+        df (DataFrame): DataFrame containing the data.
+        product (str): The product identifier.
+        window (int): The rolling window size.
+    
+    Returns:
+        fig: The matplotlib figure object.
+    """
+    # Extract the price series using VWAP.
+    price_series = get_vwap_series(df, product)
+    # Compute the rolling z-score using the provided helper function.
+    zscore_series = rolling_zscore(price_series, window)
+    
+    # Create the figure.
+    fig, ax = plt.subplots(figsize=(12, 4))
+    ax.plot(price_series.index, zscore_series, label=f'{product} Rolling Z-Score', color='purple')
+    ax.axhline(2, color='red', linestyle='--', label='Upper Threshold (2)')
+    ax.axhline(-2, color='green', linestyle='--', label='Lower Threshold (-2)')
+    ax.set_title(f'{product} Price Rolling Z-Score (Window = {window})')
+    ax.set_xlabel('Time')
+    ax.set_ylabel('Z-Score')
+    ax.legend()
+    ax.xaxis.set_major_locator(ticker.MaxNLocator(nbins=10))
+    ax.tick_params(axis='x', rotation=45)
+    plt.tight_layout()
+    return fig
+
+# Wrapper functions for z-score plots for each product:
+def plot_zscore_resin(df, window=50):
+    """Plot rolling z-score for RAINFOREST_RESIN."""
+    return plot_zscore_product(df, "RAINFOREST_RESIN", window)
+
+def plot_zscore_squid(df, window=50):
+    """Plot rolling z-score for SQUID_INK."""
+    return plot_zscore_product(df, "SQUID_INK", window)
+
+def plot_zscore_kelp(df, window=50):
+    """Plot rolling z-score for KELP."""
+    return plot_zscore_product(df, "KELP", window)
+
+
 # ---------------------------------------
 # Statistical Test Plot / Output Functions
 # ---------------------------------------
@@ -420,6 +520,9 @@ def main():
     orders_df['spread'] = orders_df.apply(calculate_spread, axis=1)
     
     # Extract mid-price series for components and baskets
+    mid_SQUINK = get_vwap_series(orders_df, 'SQUID_INK')
+    mid_RESIN = get_vwap_series(orders_df, 'RAINFOREST_RESIN')
+    mid_KELP = get_vwap_series(orders_df, 'KELP')
     mid_CROISSANTS   = get_vwap_series(orders_df, 'CROISSANTS')
     mid_JAMS         = get_vwap_series(orders_df, 'JAMS')
     mid_DJEMBES      = get_vwap_series(orders_df, 'DJEMBES')
@@ -427,6 +530,16 @@ def main():
     mid_PICNIC_BASKET2 = get_mid_price_series(orders_df, 'PICNIC_BASKET2')
     
     # Combine into a DataFrame for theoretical analysis.
+
+    df_round1 = pd.DataFrame({
+        'Squink': mid_SQUINK,
+        'Resin': mid_RESIN,
+        'Kelp': mid_KELP,
+    }).dropna()
+
+
+
+
     df_prices = pd.DataFrame({
         'Croissants': mid_CROISSANTS,
         'Jams': mid_JAMS,
@@ -434,6 +547,27 @@ def main():
         'Basket1': mid_PICNIC_BASKET1,
         'Basket2': mid_PICNIC_BASKET2
     }).dropna()
+
+    st.header("VWAP and Bid/Ask Spread Analysis")
+    fig_resin = plot_resin_vwap_spread(orders_df)
+    st.pyplot(fig_resin)
+
+    fig_squid = plot_squid_vwap_spread(orders_df)
+    st.pyplot(fig_squid)
+
+    fig_kelp = plot_kelp_vwap_spread(orders_df)
+    st.pyplot(fig_kelp)
+
+    st.header("Rolling Z-Score Analysis for Individual Products")
+    fig_z_resin = plot_zscore_resin(orders_df, window=50)
+    st.pyplot(fig_z_resin)
+
+    fig_z_squid = plot_zscore_squid(orders_df, window=50)
+    st.pyplot(fig_z_squid)
+
+    fig_z_kelp = plot_zscore_kelp(orders_df, window=50)
+    st.pyplot(fig_z_kelp)
+
     
     st.header("Theoretical Price Analysis")
     st.markdown("Comparison of actual vs. theoretical prices and the corresponding price spread for each basket.")
@@ -454,6 +588,7 @@ def main():
     st.pyplot(fig_z_b2)
     fig_z_spread = plot_zscore_spread(df_prices, window=500)
     st.pyplot(fig_z_spread)
+
     
     st.header("Statistical Tests")
     st.markdown("Results and interpretations of stationarity and cointegration tests.")
@@ -491,7 +626,8 @@ def main():
     
     st.header("Profit and Loss (PnL)")
     st.markdown("PnL (profit_and_loss) over time for individual assets.")
-    asset = st.selectbox("Select asset for PnL plot:", ["CROISSANTS", "JAMS", "DJEMBES", "PICNIC_BASKET1", "PICNIC_BASKET2"])
+    asset = st.selectbox("Select asset for PnL plot:", ["CROISSANTS", "JAMS", "DJEMBES", "PICNIC_BASKET1", "PICNIC_BASKET2", "SQUID_INK", "RAINFOREST_RESIN", "KELP"])
+
     pnl_fig = plot_pnl(orders_df, asset)
     st.pyplot(pnl_fig)
     
