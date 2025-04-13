@@ -841,7 +841,7 @@ class Trade:
     def basket_1(basket: Status, jam: Status, djembes: Status, croissant: Status) -> list[Order]:
 
         orders = []
-        orders.extend(Strategy.index_arb(basket, jam, djembes, croissant, theta = 3.65410486e-07, threshold=69*1.06727851/math.sqrt(2*1.05678874e+01), jam_m = 3, croiss_m = 6, djembe_m = 1))
+        orders.extend(Strategy.index_arb(basket, jam, djembes, croissant, theta = 3.65410486e-07, threshold=69, jam_m = 3, croiss_m = 6, djembe_m = 1))
 
         return orders
     
@@ -849,7 +849,7 @@ class Trade:
     def basket_2(basket: Status, jam: Status, djembes: Status, croissant: Status) -> list[Order]:
 
         orders = []
-        orders.extend(Strategy.index_arb(basket, jam, djembes, croissant, theta = 1.33444695e+01, threshold=50*7.76577306e+00/math.sqrt(2*1.33444695e+01), jam_m = 2, croiss_m = 4, djembe_m = 0))
+        orders.extend(Strategy.index_arb(basket, jam, djembes, croissant, theta = 1.33444695e+01, threshold=47, jam_m = 2, croiss_m = 4, djembe_m = 0))
 
         return orders
     
@@ -882,13 +882,13 @@ class Trader:
         result["JAMS"]=Trade.jams(self.state_jam)
         result["PICNIC_BASKET2"]=Trade.basket_2(self.state_picnic2, self.state_jam, self.state_djembes, self.state_croiss)
 
-        pair_orders_list = Trade.djmb_crs_pair(self.state_djembes, self.state_croiss)
+        # pair_orders_list = Trade.djmb_crs_pair(self.state_djembes, self.state_croiss)
 
-        for order in pair_orders_list:
-            symbol = order.symbol
-            if symbol not in result:
-                result[symbol] = [] 
-            result[symbol].append(order)
+        # for order in pair_orders_list:
+        #     symbol = order.symbol
+        #     if symbol not in result:
+        #         result[symbol] = [] 
+        #     result[symbol].append(order)
 
         conversions=1
 
