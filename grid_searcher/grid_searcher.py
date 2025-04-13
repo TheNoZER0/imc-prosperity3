@@ -8,6 +8,7 @@ from contextlib import redirect_stdout
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from prosperity3bt.__main__ import cli  # Assuming this remains unchanged
 import multiprocessing
+import numpy as np
 
 def sanitise_filename(s):
     """Sanitise a string to be safe in filenames (e.g., avoid special characters)."""
@@ -117,7 +118,9 @@ if __name__ == '__main__':
     grid = {
         # "threshold_b1": [i for i in range(40, 75)],
         # "threshold_b2": [i for i in range(20, 60)]
-        "threshold_p": [i for i in range(1,100)]
+        # "threshold_p": [i for i in range(1,100)]
+        "cross_z": [i for i in np.arange(0, 3, 0.2)],
+        "cross_ema": [i for i in range(5,100,2)],
     }
     
     results = grid_search_backtest(
