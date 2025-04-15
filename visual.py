@@ -1,6 +1,7 @@
 import json
 from typing import Any, List, Dict
 import jsonpickle
+from scipy.stats import norm
 import numpy as np
 import pandas as pd
 import math
@@ -9,6 +10,136 @@ from datamodel import *
 INF = 1e9
 EMA_PERIOD = 40
 MAX_BASE_QTY = 10
+
+def compute_time_to_expiry(round_number: int, current_timestamp: int) -> float:
+    total_round_units = 7_000_000
+    day_units = 1_000_000
+    remaining_units = total_round_units - (((round_number - 1) * day_units) + current_timestamp)
+    return (remaining_units / day_units) / 365.25
+
+def norm_cdf(x: float) -> float:
+    a1 = 0.31938153
+    a2 = -0.356563782
+    a3 = 1.781477937
+    a4 = -1.821255978
+    a5 = 1.330274429
+    p  = 0.2316419
+    c  = 0.3989422804014327  # 1/sqrt(2*pi)
+    sign = 1 if x >= 0 else -1
+    x = abs(x)
+    t = 1 / (1 + p * x)
+    poly = a1*t + a2*t**2 + a3*t**3 + a4*t**4 + a5*t**5
+    result = 1 - c * math.exp(-x**2 / 2) * poly
+    return 0.5 * (1 + sign * result)
+
+def bs_coupon_price(spot: float, strike: float, time_to_expiry: float,
+                    risk_free_rate: float, volatility: float) -> float:
+    """
+    Calculate the Black–Scholes price for a voucher (European call option).
+    """
+    if time_to_expiry <= 0 or volatility <= 0:
+        return max(spot - strike, 0.0)
+    sqrt_T = math.sqrt(time_to_expiry)
+    d1 = (math.log(spot / strike) + (risk_free_rate + 0.5 * volatility**2) * time_to_expiry) / (volatility * sqrt_T)
+    d2 = d1 - volatility * sqrt_T
+    price = spot * norm_cdf(d1) - strike * math.exp(-risk_free_rate * time_to_expiry) * norm_cdf(d2)
+    return price
+
+def implied_volatility(market_price: float, spot: float, strike: float, round_number: int,
+                       current_timestamp: int, r: float = 0.0, tol: float = 1e-6, max_iter: int = 1000) -> float:
+    TTE = compute_time_to_expiry(round_number, current_timestamp)
+    
+    def objective(vol):
+        return bs_coupon_price(spot, strike, TTE, r, vol) - market_price
+    
+    lower_bound = 1e-6
+    upper_bound = 1.0
+    
+    if objective(lower_bound) * objective(upper_bound) > 0:
+        return np.nan
+    
+    for _ in range(max_iter):
+        mid_vol = (lower_bound + upper_bound) / 2
+        if abs(objective(mid_vol)) < tol:
+            return mid_vol
+        if objective(lower_bound) * objective(mid_vol) < 0:
+            upper_bound = mid_vol
+        else:
+            lower_bound = mid_vol
+    
+    return np.nan
+
+def compute_m_t(spot: float, strike: float, time_to_expiry: float) -> float:
+    if spot <= 0 or time_to_expiry <= 0:
+        return np.nan
+    return math.log(strike / spot) / math.sqrt(time_to_expiry)
+
+def fit_parabolic(m_values: np.ndarray, v_values: np.ndarray) -> np.ndarray:
+    coeffs = np.polyfit(m_values, v_values, 2)
+    return coeffs
+
+def evaluate_parabolic(m: float, coeffs: np.ndarray) -> float:
+    return coeffs[0] * m**2 + coeffs[1] * m + coeffs[2]
+
+voucher_m_history: List[float] = []
+voucher_v_history: List[float] = []
+
+def compute_voucher_trade(voucher_state, strike: float, round_number: int, current_timestamp: int,
+                          r: float = 0.0, vol_multiplier: float = 1.2,
+                          base_buffer: float = 5.0, hedge_scale: float = 0.5) -> List[Order]:
+    S = voucher_state.mid
+    hist = voucher_state.hist_mid_prc(50)
+    sigma_hist = np.std(hist)
+    if sigma_hist <= 0:
+        sigma_hist = 0.01
+    volatility = sigma_hist * vol_multiplier
+    TTE = compute_time_to_expiry(round_number, current_timestamp)
+    
+    d1 = (math.log(S / strike) + (r + 0.5 * volatility**2) * TTE) / (volatility * math.sqrt(TTE))
+    d2 = d1 - volatility * math.sqrt(TTE)
+    fair_value = bs_coupon_price(S, strike, TTE, r, volatility)
+    
+    current_m = compute_m_t(S, strike, TTE)
+    # use the market voucher price as a proxy for vₜ.
+    current_v = implied_volatility(S, S, strike, round_number, current_timestamp)
+    voucher_m_history.append(current_m)
+    voucher_v_history.append(current_v)
+    
+    # if enough history is available, fit a quadratic curve
+    if len(voucher_m_history) >= 20:
+        m_array = np.array(voucher_m_history[-20:])
+        v_array = np.array(voucher_v_history[-20:])
+        coeffs = fit_parabolic(m_array, v_array)
+        base_IV = coeffs[2]  # Base IV is the constant term (at m = 0)
+        logger.print(f"Fitted Parabola Coeffs: {coeffs}, Base IV = {base_IV:.2f}")
+    else:
+        base_IV = None
+    
+    buffer = base_buffer * volatility
+    target_buy = fair_value - buffer
+    target_sell = fair_value + buffer
+
+    logger.print(f"[Voucher Trade] {voucher_state.product}: S = {S:.2f}, Fair Value = {fair_value:.2f}, "
+                 f"Target Buy = {target_buy:.2f}, Target Sell = {target_sell:.2f}, Delta = {norm_cdf(d1):.2f}")
+    
+    orders = []
+    if S < target_buy:
+        qty = voucher_state.possible_buy_amt
+        if qty > 0:
+            orders.append(Order(voucher_state.product, int(S), qty))
+            hedge_qty = int(hedge_scale * norm_cdf(d1) * qty)
+            if hedge_qty > 0:
+                orders.append(Order("VOLCANIC_ROCK", int(voucher_state.mid), -hedge_qty))
+            logger.print(f"Voucher BUY: {voucher_state.product} qty = {qty}, hedge_qty = {hedge_qty}")
+    elif S > target_sell:
+        qty = voucher_state.possible_sell_amt
+        if qty > 0:
+            orders.append(Order(voucher_state.product, int(S), -qty))
+            hedge_qty = int(hedge_scale * norm_cdf(d1) * qty)
+            if hedge_qty > 0:
+                orders.append(Order("VOLCANIC_ROCK", int(voucher_state.mid), hedge_qty))
+            logger.print(f"Voucher SELL: {voucher_state.product} qty = {qty}, hedge_qty = {hedge_qty}")
+    return orders
 
 class Logger:
     def __init__(self) -> None:
@@ -116,15 +247,23 @@ logger = Logger()
 class Status:
 
     _position_limit = {
-        "RAINFOREST_RESIN":50,
-        "KELP":50,
-        "SQUID_INK":50,
-        "CROISSANTS":250,
-        "JAMS":250,
-        "DJEMBES":60,
-        "PICNIC_BASKET1":60,
-        "PICNIC_BASKET2":100,
+        "RAINFOREST_RESIN": 50,
+        "KELP": 50,
+        "SQUID_INK": 50,
+        "CROISSANTS": 250,
+        "JAMS": 250,
+        "DJEMBES": 60,
+        "PICNIC_BASKET1": 60,
+        "PICNIC_BASKET2": 100,
+        "VOLCANIC_ROCK": 400,
+        "VOLCANIC_ROCK_VOUCHER_9500": 200,
+        "VOLCANIC_ROCK_VOUCHER_9750": 200,
+        "VOLCANIC_ROCK_VOUCHER_10000": 200,
+        "VOLCANIC_ROCK_VOUCHER_10250": 200,
+        "VOLCANIC_ROCK_VOUCHER_10500": 200,
     }
+
+
 
     _state = None
 
@@ -790,8 +929,13 @@ class Strategy:
             return -state.position
         else:
             return 0
-
-
+        
+    @staticmethod
+    def voucher_trade(voucher_state: 'Status', strike: float, round_number: int, current_timestamp: int,
+                        r: float = 0.0, vol_multiplier: float = 1.2,
+                        base_buffer: float = 5.0, hedge_scale: float = 0.5) -> List[Order]:
+        return compute_voucher_trade(voucher_state, strike, round_number, current_timestamp,
+                                     r, vol_multiplier, base_buffer, hedge_scale)
 
 CROISSANTS = "CROISSANTS"
 EMA_PERIOD = 13       # Window period for the EMA calculation.
@@ -832,17 +976,13 @@ class Trade:
         hist = state.hist_mid_prc(required_points)
         if len(hist) < required_points:
             return []
-
         slow_ema = Trade.compute_ema(hist, EMA_PERIOD)
         fast_period = max(2, EMA_PERIOD // 2)
         fast_ema = Trade.compute_ema(hist, fast_period)
-        
         macd = fast_ema - slow_ema
-
         ema_previous = Trade.compute_ema(hist[:-1], EMA_PERIOD)
         ema_current = Trade.compute_ema(hist[1:], EMA_PERIOD)
         derivative = ema_current - ema_previous
-
         sigma = np.std(hist)
         current = state.mid
         z = (current - slow_ema) / sigma if sigma > 0 else 0
@@ -852,7 +992,6 @@ class Trade:
         max_position_threshold = 20
 
         orders = []
-
         if abs(z) >= stop_loss_threshold or abs(state.rt_position) > max_position_threshold:
             minimal_qty = 1
             logger.print("Stop loss condition met: z =", z, "or high position =", state.rt_position)
@@ -861,7 +1000,6 @@ class Trade:
                 return [Order(state.product, int(current), -minimal_qty)]
             else:
                 return [Order(state.product, int(current), minimal_qty)]
-        
         if abs(z) < min_deviation:
             return []
 
@@ -870,7 +1008,6 @@ class Trade:
         
         macd_scale = 1.0 + min(0.5, abs(macd))
         base_qty = int(base_qty * macd_scale)
-        
         order_scale = min(1.0, abs(z) / 2)
         order_qty = max(1, int(base_qty * order_scale))
         
@@ -881,7 +1018,6 @@ class Trade:
             orders.append(Order(state.product, int(current), order_qty))
         elif current > slow_ema:
             orders.append(Order(state.product, int(current), -order_qty))
-        
         return orders
     
     @staticmethod
@@ -957,42 +1093,74 @@ class Trade:
             logger.print("EMA Signal: No action (z-score within threshold).")
             
         return orders
+    
+    @staticmethod
+    def voucher_trade(voucher_state: 'Status', strike: float, round_number: int, current_timestamp: int) -> List[Order]:
+        return Strategy.voucher_trade(voucher_state, strike, round_number, current_timestamp)
+    
 
+    @staticmethod
+    def volcanic_rock(state: Status) -> list[Order]:
+        current_price = state.mid
+        if state.position < 0 and state.position < -int(state.position_limit * 0.5):
+            logger.print("Stop-loss active on VOLCANIC_ROCK: reducing order size")
+            order_qty = 1
+            return [Order(state.product, int(current_price), -order_qty)]
+        orders = []
+        orders.extend(Strategy.arb(state=state, fair_price=current_price))
+        orders.extend(Strategy.mm_ou(state=state, fair_price=current_price, gamma=1e-9, order_amount=50))
+        return orders
+
+    
 class Trader:
-    state_resin= Status("RAINFOREST_RESIN")
-    state_kelp= Status("KELP")
-    state_squink= Status("SQUID_INK")
+    state_resin = Status("RAINFOREST_RESIN")
+    state_kelp = Status("KELP")
+    state_squink = Status("SQUID_INK")
     state_croiss = Status("CROISSANTS")
     state_jam = Status("JAMS")
     state_djembes = Status("DJEMBES")
     state_picnic1 = Status("PICNIC_BASKET1")
     state_picnic2 = Status("PICNIC_BASKET2")
+    state_voucher_9500 = Status("VOLCANIC_ROCK_VOUCHER_9500")
+    state_voucher_9750 = Status("VOLCANIC_ROCK_VOUCHER_9750")
+    state_voucher_10000 = Status("VOLCANIC_ROCK_VOUCHER_10000")
+    state_voucher_10250 = Status("VOLCANIC_ROCK_VOUCHER_10250")
+    state_voucher_10500 = Status("VOLCANIC_ROCK_VOUCHER_10500")
+    state_volcanic_rock = Status("VOLCANIC_ROCK")
 
     def run(self, state: TradingState) -> tuple[dict[Symbol, list[Order]], int, str]:
         Status.cls_update(state)
+        round_number = 3
+        current_timestamp = state.timestamp
 
         result = {}
 
-        # round 1
+        # Round 1 orders:
         result["RAINFOREST_RESIN"] = Trade.resin(self.state_resin)
         result["KELP"] = Trade.kelp(self.state_kelp)
-        result["SQUID_INK"]=Trade.squink(self.state_squink)
+        result["SQUID_INK"] = Trade.squink(self.state_squink)
 
-        # round 2
-        result["PICNIC_BASKET1"]=Trade.basket_1(self.state_picnic1, self.state_jam, self.state_djembes, self.state_croiss)
-        result["JAMS"]=Trade.jams(self.state_jam)
-        result["PICNIC_BASKET2"]=Trade.basket_2(self.state_picnic2, self.state_jam, self.state_djembes, self.state_croiss)
+        # Round 2 orders:
+        result["PICNIC_BASKET1"] = Trade.basket_1(self.state_picnic1, self.state_jam, self.state_djembes, self.state_croiss)
+        result["JAMS"] = Trade.jams(self.state_jam)
+        result["PICNIC_BASKET2"] = Trade.basket_2(self.state_picnic2, self.state_jam, self.state_djembes, self.state_croiss)
 
-        # pair_orders_list = Trade.djmb_crs_pair(self.state_djembes, self.state_croiss)
+        # Round 3 orders:
+        result["VOLCANIC_ROCK"] = Trade.volcanic_rock(self.state_volcanic_rock)
+        result["VOLCANIC_ROCK_VOUCHER_10000"] = Trade.voucher_trade(self.state_voucher_10000, 10000, round_number, current_timestamp)
+        result["VOLCANIC_ROCK_VOUCHER_10250"] = Trade.voucher_trade(self.state_voucher_10250, 10250, round_number, current_timestamp)
+        result["VOLCANIC_ROCK_VOUCHER_10500"] = Trade.voucher_trade(self.state_voucher_10500, 10500, round_number, current_timestamp)
+        result["VOLCANIC_ROCK_VOUCHER_9500"]  = Trade.voucher_trade(self.state_voucher_9500, 9500, round_number, current_timestamp)
+        result["VOLCANIC_ROCK_VOUCHER_9750"]  = Trade.voucher_trade(self.state_voucher_9750, 9750, round_number, current_timestamp)
 
-        # for order in pair_orders_list:
-        #     symbol = order.symbol
-        #     if symbol not in result:
-        #         result[symbol] = [] 
-        #     result[symbol].append(order)
+        pair_orders_list = Trade.djmb_crs_pair(self.state_djembes, self.state_croiss)
+        for order in pair_orders_list:
+            symbol = order.symbol
+            if symbol not in result:
+                result[symbol] = []
+            result[symbol].append(order)
 
-        conversions=1
-
-        traderData = "SAMPLE" 
+        conversions = 1
+        traderData = "SAMPLE"
         logger.flush(state, result, conversions, traderData)
         return result, conversions, traderData
