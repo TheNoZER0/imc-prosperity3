@@ -121,14 +121,15 @@ if __name__ == '__main__':
         # "threshold_p": [i for i in range(1,100)]
         # "cross_z": [i for i in np.arange(0, 3, 0.2)],
         # "cross_ema": [i for i in range(5,100,2)],
-        "alpha_ema": [i for i in np.arange(0, 1, 0.05)],
-        "threshold_ema": [i for i in np.arange(0,30, 0.5)]
+        # "alpha_ema": [i for i in np.arange(0, 1, 0.05)],
+        # "threshold_ema": [i for i in np.arange(0,30, 0.5)]
+        "threshold_volc": [i for i in np.arange(31, 37, 0.05)],
     }
     
     results = grid_search_backtest(
         algorithm_file_path=r"../visual.py",
         grid=grid,
-        rounds=["2"],
+        rounds=["3"],
         data_path=None
     )
     

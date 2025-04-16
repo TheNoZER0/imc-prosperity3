@@ -1291,7 +1291,7 @@ class Trader:
 
         # 4. Calculate Fitted Prices and Deltas (using fitted_v) & Generate Voucher Orders
         net_voucher_delta_change = 0.0
-        threshold = 1.5 # Example threshold for mispricing signal (tune this)
+        threshold = 35 # Example threshold for mispricing signal (tune this)
 
         for symbol in voucher_symbols:
             symbol_orders = []
