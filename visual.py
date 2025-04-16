@@ -1,7 +1,9 @@
 import json
 from typing import Any, List, Dict
 import jsonpickle
+from scipy.stats import norm
 import numpy as np
+import pandas as pd
 import math
 from datamodel import *
 import pandas as pd
@@ -9,6 +11,136 @@ import pandas as pd
 INF = 1e9
 EMA_PERIOD = 40
 MAX_BASE_QTY = 10
+
+def compute_time_to_expiry(round_number: int, current_timestamp: int) -> float:
+    total_round_units = 7_000_000
+    day_units = 1_000_000
+    remaining_units = total_round_units - (((round_number - 1) * day_units) + current_timestamp)
+    return (remaining_units / day_units) / 365.25
+
+def norm_cdf(x: float) -> float:
+    a1 = 0.31938153
+    a2 = -0.356563782
+    a3 = 1.781477937
+    a4 = -1.821255978
+    a5 = 1.330274429
+    p  = 0.2316419
+    c  = 0.3989422804014327  # 1/sqrt(2*pi)
+    sign = 1 if x >= 0 else -1
+    x = abs(x)
+    t = 1 / (1 + p * x)
+    poly = a1*t + a2*t**2 + a3*t**3 + a4*t**4 + a5*t**5
+    result = 1 - c * math.exp(-x**2 / 2) * poly
+    return 0.5 * (1 + sign * result)
+
+def bs_coupon_price(spot: float, strike: float, time_to_expiry: float,
+                    risk_free_rate: float, volatility: float) -> float:
+    """
+    Calculate the Black–Scholes price for a voucher (European call option).
+    """
+    if time_to_expiry <= 0 or volatility <= 0:
+        return max(spot - strike, 0.0)
+    sqrt_T = math.sqrt(time_to_expiry)
+    d1 = (math.log(spot / strike) + (risk_free_rate + 0.5 * volatility**2) * time_to_expiry) / (volatility * sqrt_T)
+    d2 = d1 - volatility * sqrt_T
+    price = spot * norm_cdf(d1) - strike * math.exp(-risk_free_rate * time_to_expiry) * norm_cdf(d2)
+    return price
+
+def implied_volatility(market_price: float, spot: float, strike: float, round_number: int,
+                       current_timestamp: int, r: float = 0.0, tol: float = 1e-6, max_iter: int = 1000) -> float:
+    TTE = compute_time_to_expiry(round_number, current_timestamp)
+    
+    def objective(vol):
+        return bs_coupon_price(spot, strike, TTE, r, vol) - market_price
+    
+    lower_bound = 1e-6
+    upper_bound = 1.0
+    
+    if objective(lower_bound) * objective(upper_bound) > 0:
+        return np.nan
+    
+    for _ in range(max_iter):
+        mid_vol = (lower_bound + upper_bound) / 2
+        if abs(objective(mid_vol)) < tol:
+            return mid_vol
+        if objective(lower_bound) * objective(mid_vol) < 0:
+            upper_bound = mid_vol
+        else:
+            lower_bound = mid_vol
+    
+    return np.nan
+
+def compute_m_t(spot: float, strike: float, time_to_expiry: float) -> float:
+    if spot <= 0 or time_to_expiry <= 0:
+        return np.nan
+    return math.log(strike / spot) / math.sqrt(time_to_expiry)
+
+def fit_parabolic(m_values: np.ndarray, v_values: np.ndarray) -> np.ndarray:
+    coeffs = np.polyfit(m_values, v_values, 2)
+    return coeffs
+
+def evaluate_parabolic(m: float, coeffs: np.ndarray) -> float:
+    return coeffs[0] * m**2 + coeffs[1] * m + coeffs[2]
+
+voucher_m_history: List[float] = []
+voucher_v_history: List[float] = []
+
+def compute_voucher_trade(voucher_state, strike: float, round_number: int, current_timestamp: int,
+                          r: float = 0.0, vol_multiplier: float = 1.2,
+                          base_buffer: float = 5.0, hedge_scale: float = 0.5) -> List[Order]:
+    S = voucher_state.mid
+    hist = voucher_state.hist_mid_prc(50)
+    sigma_hist = np.std(hist)
+    if sigma_hist <= 0:
+        sigma_hist = 0.01
+    volatility = sigma_hist * vol_multiplier
+    TTE = compute_time_to_expiry(round_number, current_timestamp)
+    
+    d1 = (math.log(S / strike) + (r + 0.5 * volatility**2) * TTE) / (volatility * math.sqrt(TTE))
+    d2 = d1 - volatility * math.sqrt(TTE)
+    fair_value = bs_coupon_price(S, strike, TTE, r, volatility)
+    
+    current_m = compute_m_t(S, strike, TTE)
+    # use the market voucher price as a proxy for vₜ.
+    current_v = implied_volatility(S, S, strike, round_number, current_timestamp)
+    voucher_m_history.append(current_m)
+    voucher_v_history.append(current_v)
+    
+    # if enough history is available, fit a quadratic curve
+    if len(voucher_m_history) >= 20:
+        m_array = np.array(voucher_m_history[-20:])
+        v_array = np.array(voucher_v_history[-20:])
+        coeffs = fit_parabolic(m_array, v_array)
+        base_IV = math.log(coeffs[2])  # Base IV is the constant term (at m = 0)
+        logger.print(f"Fitted Parabola Coeffs: {coeffs}, Base IV = {base_IV:.2f}")
+    else:
+        base_IV = None
+    
+    buffer = base_buffer * volatility
+    target_buy = fair_value - buffer
+    target_sell = fair_value + buffer
+
+    logger.print(f"[Voucher Trade] {voucher_state.product}: S = {S:.2f}, Fair Value = {fair_value:.2f}, "
+                 f"Target Buy = {target_buy:.2f}, Target Sell = {target_sell:.2f}, Delta = {norm_cdf(d1):.2f}")
+    
+    orders = []
+    if S < target_buy:
+        qty = voucher_state.possible_buy_amt
+        if qty > 0:
+            orders.append(Order(voucher_state.product, int(S), qty))
+            hedge_qty = int(hedge_scale * norm_cdf(d1) * qty)
+            if hedge_qty > 0:
+                orders.append(Order("VOLCANIC_ROCK", int(voucher_state.mid), -hedge_qty))
+            logger.print(f"Voucher BUY: {voucher_state.product} qty = {qty}, hedge_qty = {hedge_qty}")
+    elif S > target_sell:
+        qty = voucher_state.possible_sell_amt
+        if qty > 0:
+            orders.append(Order(voucher_state.product, int(S), -qty))
+            hedge_qty = int(hedge_scale * norm_cdf(d1) * qty)
+            if hedge_qty > 0:
+                orders.append(Order("VOLCANIC_ROCK", int(voucher_state.mid), hedge_qty))
+            logger.print(f"Voucher SELL: {voucher_state.product} qty = {qty}, hedge_qty = {hedge_qty}")
+    return orders
 
 class Logger:
     def __init__(self) -> None:
@@ -116,15 +248,23 @@ logger = Logger()
 class Status:
 
     _position_limit = {
-        "RAINFOREST_RESIN":50,
-        "KELP":50,
-        "SQUID_INK":50,
-        "CROISSANTS":250,
-        "JAMS":250,
-        "DJEMBES":60,
-        "PICNIC_BASKET1":60,
-        "PICNIC_BASKET2":100,
+        "RAINFOREST_RESIN": 50,
+        "KELP": 50,
+        "SQUID_INK": 50,
+        "CROISSANTS": 250,
+        "JAMS": 250,
+        "DJEMBES": 60,
+        "PICNIC_BASKET1": 60,
+        "PICNIC_BASKET2": 100,
+        "VOLCANIC_ROCK": 400,
+        "VOLCANIC_ROCK_VOUCHER_9500": 200,
+        "VOLCANIC_ROCK_VOUCHER_9750": 200,
+        "VOLCANIC_ROCK_VOUCHER_10000": 200,
+        "VOLCANIC_ROCK_VOUCHER_10250": 200,
+        "VOLCANIC_ROCK_VOUCHER_10500": 200,
     }
+
+
 
     _state = None
 
@@ -748,23 +888,40 @@ class Strategy:
                    threshold=1 , coint_vec= np.array([0.04234083, -0.07142774])):
         hedge_ratio = abs(coint_vec[0] / coint_vec[1])
 
-        djembes_prc = djembes.mid
-        croissant_prc = croissant.mid
-        spread = croissant_prc - hedge_ratio * djembes_prc
+        djembes_prc = djembes.vwap
+        croissant_prc = croissant.vwap
+        spread = croissant_prc + hedge_ratio * djembes_prc
         norm_spread = spread - pairs_mu
+        threshold = 1
+        croissant_pos = croissant.position
+        djembes_pos = djembes.position
 
         orders = []
-        if norm_spread > threshold: # Spread is HIGH -> Croissants EXPENSIVE, Djembes CHEAP
-            # SELL EXPENSIVE (Croissant), BUY CHEAP (Djembes)
-            orders.append(Order(croissant.product, int(croissant.worst_bid), -int(croissant.possible_sell_amt))) # SELL Croissant
-            orders.append(Order(djembes.product, int(djembes.worst_ask), int(djembes.possible_buy_amt)))       # BUY Djembes
-
-        elif norm_spread < -threshold: # Spread is LOW -> Croissants CHEAP, Djembes EXPENSIVE
-            # BUY CHEAP (Croissant), SELL EXPENSIVE (Djembes)
-            orders.append(Order(croissant.product, int(croissant.worst_ask), int(croissant.possible_buy_amt)))  # BUY Croissant
-            orders.append(Order(djembes.product, int(djembes.worst_bid), -int(djembes.possible_sell_amt)))     # SELL Djembes
-        return orders
+        if norm_spread > threshold: 
+            if not (croissant_pos < 0 and djembes_pos > 0): 
+                sell_qty = int(croissant.possible_sell_amt)
+                buy_qty = int(djembes.possible_buy_amt)
+                if sell_qty > 0 and buy_qty > 0:
+                     orders.append(Order(croissant.product, int(croissant.worst_bid), -sell_qty)) 
+                     orders.append(Order(djembes.product, int(djembes.worst_ask), buy_qty))       
     
+        elif norm_spread < -threshold: 
+            if not (croissant_pos > 0 and djembes_pos < 0):
+                 buy_qty = int(croissant.possible_buy_amt)
+                 sell_qty = int(djembes.possible_sell_amt)
+                 if buy_qty > 0 and sell_qty > 0:
+                      orders.append(Order(croissant.product, int(croissant.worst_ask), buy_qty))  
+                      orders.append(Order(djembes.product, int(djembes.worst_bid), -sell_qty))     
+        else: 
+            if croissant_pos > 0 and djembes_pos < 0 and norm_spread >= 0: 
+                orders.append(Order(croissant.product, int(croissant.best_bid), -croissant_pos)) # Sell current long position
+                orders.append(Order(djembes.product, int(djembes.best_ask), abs(djembes_pos)))   # Buy back current short position
+            
+            elif croissant_pos < 0 and djembes_pos > 0 and norm_spread <= 0: 
+                orders.append(Order(croissant.product, int(croissant.best_ask), abs(croissant_pos))) # Buy back current short position
+                orders.append(Order(djembes.product, int(djembes.best_bid), -djembes_pos))     # Sell current long position
+        return orders
+        
     @staticmethod
     def convert(state: Status):
         if state.position < 0:
@@ -773,8 +930,13 @@ class Strategy:
             return -state.position
         else:
             return 0
-
-
+        
+    @staticmethod
+    def voucher_trade(voucher_state: 'Status', strike: float, round_number: int, current_timestamp: int,
+                        r: float = 0.0, vol_multiplier: float = 1.2,
+                        base_buffer: float = 5.0, hedge_scale: float = 0.5) -> List[Order]:
+        return compute_voucher_trade(voucher_state, strike, round_number, current_timestamp,
+                                     r, vol_multiplier, base_buffer, hedge_scale)
 
 CROISSANTS = "CROISSANTS"
 EMA_PERIOD = 13       # Window period for the EMA calculation.
@@ -967,48 +1129,310 @@ class Trade:
             logger.print("EMA Signal: No action (z-score within threshold).")
             
         return orders
+    
+    @staticmethod
+    def voucher_trade(voucher_state: 'Status', strike: float, round_number: int, current_timestamp: int) -> List[Order]:
+        return Strategy.voucher_trade(voucher_state, strike, round_number, current_timestamp)
+    
 
+    @staticmethod
+    def volcanic_rock(state: Status) -> list[Order]:
+        current_price = state.mid
+        if state.position < 0 and state.position < -int(state.position_limit * 0.5):
+            logger.print("Stop-loss active on VOLCANIC_ROCK: reducing order size")
+            order_qty = 1
+            return [Order(state.product, int(current_price), -order_qty)]
+        orders = []
+        orders.extend(Strategy.arb(state=state, fair_price=current_price))
+        orders.extend(Strategy.mm_ou(state=state, fair_price=current_price, gamma=1e-9, order_amount=50))
+        return orders
+
+    
 class Trader:
-    state_resin= Status("RAINFOREST_RESIN")
-    state_kelp= Status("KELP")
-    state_squink= Status("SQUID_INK")
+    state_resin = Status("RAINFOREST_RESIN")
+    state_kelp = Status("KELP")
+    state_squink = Status("SQUID_INK")
     state_croiss = Status("CROISSANTS")
     state_jam = Status("JAMS")
     state_djembes = Status("DJEMBES")
     state_picnic1 = Status("PICNIC_BASKET1")
     state_picnic2 = Status("PICNIC_BASKET2")
+    state_voucher_9500 = Status("VOLCANIC_ROCK_VOUCHER_9500")
+    state_voucher_9750 = Status("VOLCANIC_ROCK_VOUCHER_9750")
+    state_voucher_10000 = Status("VOLCANIC_ROCK_VOUCHER_10000")
+    state_voucher_10250 = Status("VOLCANIC_ROCK_VOUCHER_10250")
+    state_voucher_10500 = Status("VOLCANIC_ROCK_VOUCHER_10500")
+    state_volcanic_rock = Status("VOLCANIC_ROCK")
+    
+    last_vol_coeffs = None
+    voucher_deltas = {}
 
     def run(self, state: TradingState) -> tuple[dict[Symbol, list[Order]], int, str]:
         Status.cls_update(state)
+        round_number = 3
+        current_timestamp = state.timestamp
 
         result = {}
 
-        # round 1
+        # Round 1 orders:
         result["RAINFOREST_RESIN"] = Trade.resin(self.state_resin)
         result["KELP"] = Trade.kelp(self.state_kelp)
-        result["SQUID_INK"]=Trade.ema_mean_reversion(self.state_squink)
+        result["SQUID_INK"] = Trade.ema_mean_reversion(self.state_squink)
 
-        # round 2
-        result["PICNIC_BASKET1"]=Trade.basket_1(self.state_picnic1, self.state_jam, self.state_djembes, self.state_croiss)
-        result["JAMS"]=Trade.jams(self.state_jam)
-        result["PICNIC_BASKET2"]=Trade.basket_2(self.state_picnic2, self.state_jam, self.state_djembes, self.state_croiss)
-        #result[""]
-        pair_orders_list = Trade.djmb_crs_pair(self.state_djembes, self.state_croiss)
-        djembes_pair_orders = [order for order in pair_orders_list if order.symbol == "DJEMBES"]
-        for order in djembes_pair_orders:
-            symbol = order.symbol
-            if symbol not in result:
-                result[symbol] = []
-            result[symbol].append(order)
+        # Round 2 orders:
+        result["PICNIC_BASKET1"] = Trade.basket_1(self.state_picnic1, self.state_jam, self.state_djembes, self.state_croiss)
+        result["JAMS"] = Trade.jams(self.state_jam)
+        result["PICNIC_BASKET2"] = Trade.basket_2(self.state_picnic2, self.state_jam, self.state_djembes, self.state_croiss)
+
+        # --- Volcanic Strategy (Round 3) ---
+        # Define voucher symbols, states, and strikes
+        voucher_symbols = [
+            "VOLCANIC_ROCK_VOUCHER_9500", "VOLCANIC_ROCK_VOUCHER_9750",
+            "VOLCANIC_ROCK_VOUCHER_10000", "VOLCANIC_ROCK_VOUCHER_10250",
+            "VOLCANIC_ROCK_VOUCHER_10500"
+        ]
         
+        try:
+            voucher_states = {
+                "VOLCANIC_ROCK_VOUCHER_9500": self.state_voucher_9500,
+                "VOLCANIC_ROCK_VOUCHER_9750": self.state_voucher_9750,
+                "VOLCANIC_ROCK_VOUCHER_10000": self.state_voucher_10000,
+                "VOLCANIC_ROCK_VOUCHER_10250": self.state_voucher_10250,
+                "VOLCANIC_ROCK_VOUCHER_10500": self.state_voucher_10500,
+            }
+            # Also ensure the underlying state exists
+            if not hasattr(self, 'state_volcanic_rock'):
+                 raise AttributeError("state_volcanic_rock not defined in Trader")
 
-        ema_orders = Trade.croissant_ema(state)
-        for order in ema_orders:
-            result.setdefault(order.symbol, []).append(order)
+        except AttributeError as e:
+             logger.print(f"CRITICAL ERROR: Missing state attribute in Trader class: {e}")
+             logger.flush(state, result, 0, "AttributeError") # Log error and exit run
+             return result, 0, "AttributeError"
+        
+        
+        strikes = {
+            "VOLCANIC_ROCK_VOUCHER_9500": 9500, "VOLCANIC_ROCK_VOUCHER_9750": 9750,
+            "VOLCANIC_ROCK_VOUCHER_10000": 10000, "VOLCANIC_ROCK_VOUCHER_10250": 10250,
+            "VOLCANIC_ROCK_VOUCHER_10500": 10500
+        }
+
+        # 1. Get Inputs
+        try:
+            # CRITICAL: Use VOLCANIC_ROCK price as spot (St in hint)
+            spot_volcanic = self.state_volcanic_rock.mid
+            TTE = compute_time_to_expiry(round_number, current_timestamp)
+            r = 0.0 # Risk-free rate
+            # Ensure TTE is valid
+            if TTE <= 1e-9: # Avoid division by zero or tiny TTE issues
+                 raise ValueError(f"Time to expiry is too small or zero: {TTE}")
+        except Exception as e:
+            logger.print(f"Error getting Volcanic inputs or invalid TTE: {e}. Skipping Volcanic strategy.")
+            logger.flush(state, result, 1, "ErrorState")
+            return result, 1, "ErrorState"
+
+        # 2. Calculate m_t and actual_v_t (Implied Vol) for all vouchers
+        valid_m_values = []
+        valid_v_values = []
+        current_ivs = {}
+        current_moneyness = {}
+
+        for symbol in voucher_symbols:
+            voucher_state = voucher_states[symbol]
+            try:
+                # Vt in hint = voucher market price
+                market_price = voucher_state.mid
+                K = strikes[symbol]
+
+                if market_price <= 0 or spot_volcanic <= 0:
+                    logger.print(f"Skipping IV/M calc for {symbol}: Invalid prices (S={spot_volcanic:.2f}, V={market_price:.2f})")
+                    current_ivs[symbol] = np.nan
+                    current_moneyness[symbol] = np.nan
+                    continue
+
+                # Calculate Implied Volatility (using correct spot)
+                # v_t = BlackScholes ImpliedVol(St, Vt, K, TTE)
+                actual_v_t = implied_volatility(market_price, spot_volcanic, K, round_number, current_timestamp, r)
+                current_ivs[symbol] = actual_v_t
+
+                # Calculate Moneyness
+                # m_t = log(K/St)/ sqrt(TTE)
+                m_t = compute_m_t(spot_volcanic, K, TTE)
+                current_moneyness[symbol] = m_t
+
+                # Filter unreliable values before fitting
+                # (Adjust bounds as needed based on testing)
+                if not np.isnan(actual_v_t) and not np.isnan(m_t) and 0.05 < actual_v_t < 1.5:
+                     valid_m_values.append(m_t)
+                     valid_v_values.append(actual_v_t)
+                     logger.print(f"Valid point for fit: {symbol} m_t={m_t:.4f}, v_t={actual_v_t:.4f}")
+                else:
+                    logger.print(f"Filtered out IV/M for {symbol}: m_t={m_t:.4f}, actual_v_t={actual_v_t:.4f}")
+
+            except Exception as e:
+                logger.print(f"Error calculating IV/M for {symbol}: {e}")
+                current_ivs[symbol] = np.nan
+                current_moneyness[symbol] = np.nan
+
+        # 3. Fit Parabolic Curve (Requires numpy, which is allowed)
+        fitted_coeffs = None
+        if len(valid_m_values) >= 3: # Need 3+ points for quadratic fit
+            try:
+                # v = a*m^2 + b*m + c  <- polyfit returns [a, b, c]
+                fitted_coeffs = np.polyfit(valid_m_values, valid_v_values, 2)
+                self.last_vol_coeffs = fitted_coeffs # Store for traderData
+                base_IV = fitted_coeffs[2] # c term = fitted v_t(m_t=0)
+                logger.print(f"Fit Parabola Coeffs (a,b,c): {fitted_coeffs}, Base IV (c) = {base_IV:.4f}")
+            except Exception as e:
+                logger.print(f"Error fitting parabola: {e}")
+                fitted_coeffs = None
+        else:
+            logger.print(f"Not enough valid points ({len(valid_m_values)}) to fit parabola.")
+            fitted_coeffs = None
+
+        # 4. Calculate Fitted Prices and Deltas (using fitted_v) & Generate Voucher Orders
+        net_voucher_delta_change = 0.0
+        threshold = 1.5 # Example threshold for mispricing signal (tune this)
+
+        for symbol in voucher_symbols:
+            symbol_orders = []
+            voucher_state = voucher_states[symbol]
+            try:
+                market_price = voucher_state.mid # Vt
+                K = strikes[symbol]
+                m_t = current_moneyness.get(symbol, np.nan)
+                delta = np.nan # Initialize delta
+
+                if fitted_coeffs is not None and not np.isnan(m_t):
+                    # Evaluate fitted volatility: fitted_v = a*m^2 + b*m + c
+                    fitted_v = evaluate_parabolic(m_t, fitted_coeffs)
+                    # Clamp fitted_v to prevent extreme values in BS
+                    fitted_v = max(0.01, min(1.5, fitted_v)) # Adjust bounds as needed
+
+                    # Calculate theoretical price using the fitted volatility
+                    fitted_price = bs_coupon_price(spot_volcanic, K, TTE, r, fitted_v)
+
+                    # Calculate Delta using fitted_v and CUSTOM norm_cdf
+                    if fitted_v * math.sqrt(TTE) > 1e-9: # Avoid division by zero
+                         sqrt_T = math.sqrt(TTE)
+                         d1 = (math.log(spot_volcanic / K) + (r + 0.5 * fitted_v**2) * TTE) / (fitted_v * sqrt_T)
+                         delta = norm_cdf(d1) # USE YOUR CUSTOM norm_cdf
+                    else:
+                         delta = 0.0 if spot_volcanic <= K else 1.0 # Intrinsic delta
+                    self.voucher_deltas[symbol] = delta # Store delta
+
+                    logger.print(f"{symbol}: M={m_t:.2f}, ActualV={current_ivs.get(symbol, np.nan):.4f}, FittedV={fitted_v:.4f}, MarketP={market_price:.2f}, FittedP={fitted_price:.2f}, Delta={delta:.3f}")
+
+                    # Generate Orders based on mispricing vs fitted curve
+                    if market_price < fitted_price - threshold:
+                        qty = voucher_state.possible_buy_amt
+                        if qty > 0:
+                            # Aggressive buy: offer slightly above market mid or at fitted price? Test this.
+                            order_price = int(math.ceil(market_price + 0.5)) # Example: round up mid
+                            order = Order(symbol, order_price, qty)
+                            symbol_orders.append(order)
+                            net_voucher_delta_change += delta * qty # Accumulate delta change
+                            logger.print(f"-> VOUCHER BUY {symbol} @ {order.price} x {qty}")
+                    elif market_price > fitted_price + threshold:
+                        qty = voucher_state.possible_sell_amt
+                        if qty > 0:
+                            # Aggressive sell: offer slightly below market mid
+                            order_price = int(math.floor(market_price - 0.5)) # Example: round down mid
+                            order = Order(symbol, order_price, -qty)
+                            symbol_orders.append(order)
+                            # Delta change is delta * (-qty) = -delta * qty
+                            net_voucher_delta_change -= delta * qty # Accumulate delta change
+                            logger.print(f"-> VOUCHER SELL {symbol} @ {order.price} x {-qty}")
+                else:
+                    # No fit or invalid m_t, clear stored delta
+                    self.voucher_deltas.pop(symbol, None)
+                    logger.print(f"{symbol}: Skipping trade signal generation (no valid fit or inputs).")
+
+                # Add orders for this symbol to the main result dictionary
+                if symbol_orders:
+                    if symbol not in result: result[symbol] = []
+                    result[symbol].extend(symbol_orders)
+
+            except Exception as e:
+                logger.print(f"Error processing trade signal for {symbol}: {e}")
+                self.voucher_deltas.pop(symbol, None) # Clear delta on error
 
 
-        conversions=1
+        # 5. Calculate Net Portfolio Delta and Hedge Order
+        current_portfolio_delta = 0.0
+        for symbol in voucher_symbols:
+            position = voucher_states[symbol].position # Current position
+            delta = self.voucher_deltas.get(symbol, 0.0) # Use stored delta
+            current_portfolio_delta += position * delta
 
-        traderData = "SAMPLE" 
+        # Total delta after planned trades = current delta + delta from new trades
+        total_target_delta = current_portfolio_delta + net_voucher_delta_change
+
+        # Target position in underlying to be delta neutral
+        target_hedge_position = -round(total_target_delta)
+
+        # Calculate hedge order quantity needed
+        current_hedge_position = self.state_volcanic_rock.position
+        hedge_order_qty = target_hedge_position - current_hedge_position
+
+        # Apply VOLCANIC_ROCK position limits (ensure Status class property is correct)
+        hedge_limit = self.state_volcanic_rock.position_limit
+        if hedge_order_qty > 0: # Buying hedge
+            hedge_order_qty = min(hedge_order_qty, hedge_limit - current_hedge_position)
+        elif hedge_order_qty < 0: # Selling hedge
+            hedge_order_qty = max(hedge_order_qty, -hedge_limit - current_hedge_position)
+
+        logger.print(f"Delta Hedge: CurrentVoucherDelta={current_portfolio_delta:.2f}, NewTradeDelta={net_voucher_delta_change:.2f}, TargetNetDelta={total_target_delta:.2f}")
+        logger.print(f"Hedge Calc: TargetHedgePos={target_hedge_position}, CurrentHedgePos={current_hedge_position}, OrderQty={hedge_order_qty}")
+
+        # Create hedge order for VOLCANIC_ROCK if needed
+        if abs(hedge_order_qty) > 0:
+             # Use underlying's price for hedge order - try to cross spread slightly
+            best_bid_vr = self.state_volcanic_rock.best_bid
+            best_ask_vr = self.state_volcanic_rock.best_ask
+            if hedge_order_qty > 0: # Buying hedge
+                 hedge_price = best_ask_vr # Take best ask
+            else: # Selling hedge
+                 hedge_price = best_bid_vr # Take best bid
+
+            # Ensure valid price exists (market might be wide or empty)
+            if best_bid_vr < best_ask_vr : # Basic check for valid market
+                hedge_order = Order("VOLCANIC_ROCK", hedge_price, hedge_order_qty)
+                logger.print(f"-> HEDGE ORDER: {hedge_order.symbol} @ {hedge_order.price} x {hedge_order.quantity}")
+                if "VOLCANIC_ROCK" not in result: result["VOLCANIC_ROCK"] = []
+                result["VOLCANIC_ROCK"].append(hedge_order)
+            else:
+                logger.print(f"Cannot place hedge order: Invalid market BBO ({best_bid_vr} / {best_ask_vr})")
+        else:
+             logger.print("No hedge order needed.")
+
+        # Optional: If no hedge order was placed, consider adding back the original MM/Arb logic
+        # if "VOLCANIC_ROCK" not in result:
+        #     result["VOLCANIC_ROCK"] = Trade.volcanic_rock(self.state_volcanic_rock)
+
+
+        # --- Final Steps ---
+        conversions = 0 # Set conversions if needed by other strategies
+
+        # Serialize traderData - CHECK IF jsonpickle IS ALLOWED
+        try:
+            # If jsonpickle is allowed:
+            # import jsonpickle
+            serializable_coeffs = self.last_vol_coeffs # Keep as numpy array
+            trader_data_dict = {"last_vol_coeffs": serializable_coeffs, "voucher_deltas": self.voucher_deltas}
+            traderData = jsonpickle.encode(trader_data_dict)
+
+            # # If jsonpickle is NOT allowed:
+            # import json
+            # serializable_coeffs = None
+            # if self.last_vol_coeffs is not None:
+            #      serializable_coeffs = self.last_vol_coeffs.tolist() # Convert numpy array to list
+            # trader_data_dict = {"last_vol_coeffs": serializable_coeffs, "voucher_deltas": self.voucher_deltas}
+            # traderData = json.dumps(trader_data_dict, separators=(",", ":"))
+
+        except Exception as e:
+            logger.print(f"Error serializing traderData: {e}")
+            traderData = "" # Fallback to empty string
+
+
         logger.flush(state, result, conversions, traderData)
         return result, conversions, traderData
