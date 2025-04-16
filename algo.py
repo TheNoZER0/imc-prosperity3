@@ -117,66 +117,6 @@ def fit_parabolic(m_values: np.ndarray, v_values: np.ndarray) -> np.ndarray:
 def evaluate_parabolic(m: float, coeffs: np.ndarray) -> float:
     return coeffs[0] * m**2 + coeffs[1] * m + coeffs[2]
 
-voucher_m_history: List[float] = []
-voucher_v_history: List[float] = []
-
-def compute_voucher_trade(voucher_state, strike: float, round_number: int, current_timestamp: int,
-                          r: float = 0.0, vol_multiplier: float = 1.2,
-                          base_buffer: float = 5.0, hedge_scale: float = 0.5) -> List[Order]:
-    S = voucher_state.mid
-    hist = voucher_state.hist_mid_prc(50)
-    sigma_hist = np.std(hist)
-    if sigma_hist <= 0:
-        sigma_hist = 0.01
-    volatility = sigma_hist * vol_multiplier
-    TTE = compute_time_to_expiry(round_number, current_timestamp)
-    
-    d1 = (math.log(S / strike) + (r + 0.5 * volatility**2) * TTE) / (volatility * math.sqrt(TTE))
-    d2 = d1 - volatility * math.sqrt(TTE)
-    fair_value = bs_coupon_price(S, strike, TTE, r, volatility)
-    
-    current_m = compute_m_t(S, strike, TTE)
-    # use the market voucher price as a proxy for vₜ.
-    current_v = implied_volatility(S, S, strike, round_number, current_timestamp)
-    voucher_m_history.append(current_m)
-    voucher_v_history.append(current_v)
-    
-    # if enough history is available, fit a quadratic curve
-    if len(voucher_m_history) >= 20:
-        m_array = np.array(voucher_m_history[-20:])
-        v_array = np.array(voucher_v_history[-20:])
-        coeffs = fit_parabolic(m_array, v_array)
-        base_IV = math.log(coeffs[2])  # Base IV is the constant term (at m = 0)
-        logger.print(f"Fitted Parabola Coeffs: {coeffs}, Base IV = {base_IV:.2f}")
-    else:
-        base_IV = None
-    
-    buffer = base_buffer * volatility
-    target_buy = fair_value - buffer
-    target_sell = fair_value + buffer
-
-    logger.print(f"[Voucher Trade] {voucher_state.product}: S = {S:.2f}, Fair Value = {fair_value:.2f}, "
-                 f"Target Buy = {target_buy:.2f}, Target Sell = {target_sell:.2f}, Delta = {norm_cdf(d1):.2f}")
-    
-    orders = []
-    if S < target_buy:
-        qty = voucher_state.possible_buy_amt
-        if qty > 0:
-            orders.append(Order(voucher_state.product, int(S), qty))
-            hedge_qty = int(hedge_scale * norm_cdf(d1) * qty)
-            if hedge_qty > 0:
-                orders.append(Order("VOLCANIC_ROCK", int(voucher_state.mid), -hedge_qty))
-            logger.print(f"Voucher BUY: {voucher_state.product} qty = {qty}, hedge_qty = {hedge_qty}")
-    elif S > target_sell:
-        qty = voucher_state.possible_sell_amt
-        if qty > 0:
-            orders.append(Order(voucher_state.product, int(S), -qty))
-            hedge_qty = int(hedge_scale * norm_cdf(d1) * qty)
-            if hedge_qty > 0:
-                orders.append(Order("VOLCANIC_ROCK", int(voucher_state.mid), hedge_qty))
-            logger.print(f"Voucher SELL: {voucher_state.product} qty = {qty}, hedge_qty = {hedge_qty}")
-    return orders
-
 class Logger:
     def __init__(self) -> None:
         self.logs = ""
@@ -298,8 +238,6 @@ class Status:
         "VOLCANIC_ROCK_VOUCHER_10250": 200,
         "VOLCANIC_ROCK_VOUCHER_10500": 200,
     }
-
-
 
     _state = None
 
@@ -770,6 +708,19 @@ class Status:
         else:
             return 0
 
+class StrategyParameters:
+    # Store pre-calculated values here
+    PB1_INTERCEPT = 39630.2076
+    PB1_HEDGE_C = 0.8869
+    PB1_HEDGE_J = 1.1386
+    PB1_HEDGE_D = 0.5892
+    PB1_SPREAD_STD_DEV = 150.0
+    PB1_ENTRY_THRESHOLD = 0.75
+    PB1_EXIT_THRESHOLD = 0.1
+    TRADE_SIZE_PB1 = 60
+
+    LIMITS = Status._position_limit
+
 class Strategy:
     @staticmethod
     def arb(state: Status, fair_price):
@@ -889,72 +840,65 @@ class Strategy:
         return orders
     
     @staticmethod
-    def index_arb(
-        basket: Status,
-        jam: Status,
-        djembes: Status,
-        croissant: Status,
-        theta=0,
-        threshold=0,
-        jam_m= 3,
-        croiss_m= 6,
-        djembe_m= 1,
-    ):
-        
-        basket_prc = basket.mid
-        underlying_prc = jam_m * jam.vwap + croiss_m * croissant.vwap + djembe_m * djembes.vwap
-        spread = basket_prc - underlying_prc
-        norm_spread = spread - theta
+    def check_limits(current_positions: Dict[str, int], trades: Dict[str, int], limits: Dict[str, int]):
+        """ Checks if a potential multi-leg trade respects all position limits """
+        for product, trade_qty in trades.items():
+            current_pos = current_positions.get(product, 0)
+            limit = limits.get(product, 0)
+            if limit == 0: continue
+            if abs(current_pos + trade_qty) > limit:
+                logger.print(f"Limit Check FAIL: Prod={product}, Curr={current_pos}, Trade={trade_qty}, Limit={limit}")
+                return False
+        return True
 
-        orders = []
-        if norm_spread > threshold:
-            orders.append(Order(basket.product, int(basket.worst_bid), -int(basket.possible_sell_amt)))
-        elif norm_spread < -threshold:
-            orders.append(Order(basket.product, int(basket.worst_ask), int(basket.possible_buy_amt)))
-
-        return orders
-    
     @staticmethod
-    def pair_trade(croissant: Status, 
-                   djembes: Status, 
-                   pairs_mu = 267.613375701525, 
-                   theta = 1.03482227e+03, 
-                   sigma = 4.46392304e-03, 
-                   threshold=1 , coint_vec= np.array([0.04234083, -0.07142774])):
-        hedge_ratio = abs(coint_vec[0] / coint_vec[1])
+    def stat_arb(state_pb1: Status, state_c: Status, state_j: Status, state_d: Status) -> Dict[str, List[Order]]:
+        orders: Dict[str, List[Order]] = {}
+        params = StrategyParameters
+        mid_pb1 = state_pb1.mid
+        mid_c = state_c.mid
+        mid_j = state_j.mid
+        mid_d = state_d.mid
+        best_bid_pb1 = state_pb1.best_bid
+        best_ask_pb1 = state_pb1.best_ask
+        best_bid_c = state_c.best_bid; best_ask_c = state_c.best_ask
+        best_bid_j = state_j.best_bid; best_ask_j = state_j.best_ask
+        best_bid_d = state_d.best_bid; best_ask_d = state_d.best_ask
 
-        djembes_prc = djembes.vwap
-        croissant_prc = croissant.vwap
-        spread = croissant_prc + hedge_ratio * djembes_prc
-        norm_spread = spread - pairs_mu
-        threshold = 1
-        croissant_pos = croissant.position
-        djembes_pos = djembes.position
+        predicted_pb1 = (params.PB1_INTERCEPT + params.PB1_HEDGE_C * mid_c + params.PB1_HEDGE_J * mid_j + params.PB1_HEDGE_D * mid_d)
+        current_spread = mid_pb1 - predicted_pb1
+        current_zscore = current_spread / params.PB1_SPREAD_STD_DEV
 
-        orders = []
-        if norm_spread > threshold: 
-            if not (croissant_pos < 0 and djembes_pos > 0): 
-                sell_qty = int(croissant.possible_sell_amt)
-                buy_qty = int(djembes.possible_buy_amt)
-                if sell_qty > 0 and buy_qty > 0:
-                     orders.append(Order(croissant.product, int(croissant.worst_bid), -sell_qty)) 
-                     orders.append(Order(djembes.product, int(djembes.worst_ask), buy_qty))       
-    
-        elif norm_spread < -threshold: 
-            if not (croissant_pos > 0 and djembes_pos < 0):
-                 buy_qty = int(croissant.possible_buy_amt)
-                 sell_qty = int(djembes.possible_sell_amt)
-                 if buy_qty > 0 and sell_qty > 0:
-                      orders.append(Order(croissant.product, int(croissant.worst_ask), buy_qty))  
-                      orders.append(Order(djembes.product, int(djembes.worst_bid), -sell_qty))     
-        else: 
-            if croissant_pos > 0 and djembes_pos < 0 and norm_spread >= 0: 
-                orders.append(Order(croissant.product, int(croissant.best_bid), -croissant_pos)) # Sell current long position
-                orders.append(Order(djembes.product, int(djembes.best_ask), abs(djembes_pos)))   # Buy back current short position
-            
-            elif croissant_pos < 0 and djembes_pos > 0 and norm_spread <= 0: 
-                orders.append(Order(croissant.product, int(croissant.best_ask), abs(croissant_pos))) # Buy back current short position
-                orders.append(Order(djembes.product, int(djembes.best_bid), -djembes_pos))     # Sell current long position
+        pos_pb1 = state_pb1.rt_position
+        pos_c = state_c.rt_position
+        pos_j = state_j.rt_position
+        pos_d = state_d.rt_position
+        current_positions = { state_pb1.product: pos_pb1, state_c.product: pos_c, state_j.product: pos_j, state_d.product: pos_d}
+        target_trades: Dict[str, int] = {}
+
+        if current_zscore > params.PB1_ENTRY_THRESHOLD:
+            target_trades[state_pb1.product] = -params.TRADE_SIZE_PB1
+            target_trades[state_c.product] = round(params.TRADE_SIZE_PB1 * params.PB1_HEDGE_C)
+            target_trades[state_j.product] = round(params.TRADE_SIZE_PB1 * params.PB1_HEDGE_J)
+            target_trades[state_d.product] = round(params.TRADE_SIZE_PB1 * params.PB1_HEDGE_D)
+        elif current_zscore < -params.PB1_ENTRY_THRESHOLD:
+            target_trades[state_pb1.product] = params.TRADE_SIZE_PB1
+            target_trades[state_c.product] = -round(params.TRADE_SIZE_PB1 * params.PB1_HEDGE_C)
+            target_trades[state_j.product] = -round(params.TRADE_SIZE_PB1 * params.PB1_HEDGE_J)
+            target_trades[state_d.product] = -round(params.TRADE_SIZE_PB1 * params.PB1_HEDGE_D)
+        
+        if target_trades:
+            if Strategy.check_limits(current_positions, target_trades, params.LIMITS):
+                successful_updates = True
+                for product, qty in target_trades.items():
+                    if qty == 0: continue
+                    if product == state_pb1.product: state_obj = state_pb1
+                    elif product == state_c.product: state_obj = state_c
+                    elif product == state_j.product: state_obj = state_j
+                    elif product == state_d.product: state_obj = state_d
+
+                    price = best_ask = state_obj.best_ask if qty > 0 else state_obj.best_bid
+                    orders.setdefault(product, []).append(Order(product, price, qty))
         return orders
         
     @staticmethod
@@ -966,393 +910,43 @@ class Strategy:
         else:
             return 0
         
-    @staticmethod
-    def voucher_trade(voucher_state: 'Status', strike: float, round_number: int, current_timestamp: int,
-                        r: float = 0.0, vol_multiplier: float = 1.2,
-                        base_buffer: float = 5.0, hedge_scale: float = 0.5) -> List[Order]:
-        return compute_voucher_trade(voucher_state, strike, round_number, current_timestamp,
-                                     r, vol_multiplier, base_buffer, hedge_scale)
-
-CROISSANTS = "CROISSANTS"
-EMA_PERIOD = 13       # Window period for the EMA calculation.
-class Trade:
-    mid_price_history = {CROISSANTS: []}
-    @staticmethod   
-    def resin(state: Status) -> list[Order]:
-
-        current_price = state.maxamt_midprc
-
-        orders = []
-        orders.extend(Strategy.arb(state=state, fair_price=current_price))
-        orders.extend(Strategy.mm_ou(state=state, fair_price=current_price, gamma=1e-9, order_amount=50))
-
-        return orders
+# class Trade:
     
-    @staticmethod
-    def kelp(state: Status) -> list[Order]:
-
-        current_price = state.maxamt_midprc
-
-        orders = []
-        orders.extend(Strategy.arb(state=state, fair_price=current_price))
-        orders.extend(Strategy.mm_glft(state=state, fair_price=current_price, mu = 1.2484084052394708e-07, sigma = 0.0001199636554242691, gamma=1e-9, order_amount=50))
-
-        return orders
-    
-    def compute_ema(prices: list[float], period: int) -> float:
-        alpha = 2 / (period + 1)
-        ema = prices[0]
-        for price in prices[1:]:
-            ema = alpha * price + (1 - alpha) * ema
-        return ema
-
-    @staticmethod
-    def ema_mean_reversion(squink: Status, alpha=0.15, threshold=14):
-        orders = []
-        squink_prc = squink.mid  # This is a float
-
-        # Ensure squink has an attribute for historical prices.
-        if not hasattr(squink, 'price_history'):
-            squink.price_history = []
-            
-        # Append the current price to the history.
-        squink.price_history.append(squink_prc)
-        
-        # Only compute the EMA if we have enough history (e.g., at least 10 data points)
-        if len(squink.price_history) < 100:
-            return orders  # or you can decide to simply return no orders
-        
-        # Convert the price history to a Pandas Series
-        price_series = pd.Series(squink.price_history)
-        
-        # Compute the EMA using Pandas' ewm method
-        ema = price_series.ewm(alpha=alpha, adjust=False).mean().iloc[-1]
-
-        if squink_prc > ema + threshold:
-            orders.append(Order(squink.product, int(squink.best_bid), -int(squink.possible_sell_amt)))
-        elif squink_prc < ema - threshold:
-            orders.append(Order(squink.product, int(squink.best_ask), int(squink.possible_buy_amt)))
-        return orders
-    
-    @staticmethod
-    def jams(state: Status) -> list[Order]:
-
-        current_price = state.maxamt_midprc
-
-        orders = []
-        orders.extend(Strategy.arb(state=state, fair_price=current_price))
-        orders.extend(Strategy.mm_glft(state=state, fair_price=current_price, mu = -7.60706813499185e-07, sigma = 7.890239872766339e-05, gamma=1e-9, order_amount=50))
-
-        return orders
-    
-    @staticmethod
-    def djmb_crs_pair(state_djembes: Status, state_croiss: Status) -> List[Order]:
-        return Strategy.pair_trade(croissant=state_croiss, djembes=state_djembes)
-    
-    @staticmethod
-    def basket_1(basket: Status, jam: Status, djembes: Status, croissant: Status) -> list[Order]:
-
-        orders = []
-        orders.extend(Strategy.index_arb(basket, jam, djembes, croissant, theta = 3.65410486e-07, threshold=69, jam_m = 3, croiss_m = 6, djembe_m = 1))
-
-        return orders
-
-    @staticmethod
-    def basket_2(basket: Status, jam: Status, djembes: Status, croissant: Status) -> list[Order]:
-
-        orders = []
-        orders.extend(Strategy.index_arb(basket, jam, djembes, croissant, theta = 1.33444695e+01, threshold=47, jam_m = 2, croiss_m = 4, djembe_m = 0))
-
-        return orders
-    
-    @staticmethod
-    def convert(state: Status) -> int:
-        return Strategy.convert(state=state)
-    
-    @staticmethod
-    def croissant_ema(state: TradingState) -> list[Order]:
-        # Access the class attribute instead of a global variable.
-        status = Status(CROISSANTS)
-        Status.cls_update(state)
-        current_price = status.mid
-
-        history = Trade.mid_price_history[CROISSANTS]
-        history.append(current_price)
-        if len(history) > EMA_PERIOD:
-            history.pop(0)
-            
-        if len(history) < EMA_PERIOD:
-            return []
-        
-        alpha = 2 / (EMA_PERIOD + 1)
-        ema = history[0]
-        for price in history[1:]:
-            ema = alpha * price + (1 - alpha) * ema
-        
-        std = np.std(history)
-        z_score = (current_price - ema) / std if std > 0 else 0
-        
-        logger.print("Croissants EMA Strategy:", "Current Price =", current_price, "EMA =", ema, "Std =", std, "z =", z_score)
-        
-        orders = []
-        if z_score < -2.8:
-            qty = status.possible_buy_amt
-            orders.append(Order(CROISSANTS, int(current_price), qty))
-            logger.print("EMA Signal: BUY CROISSANTS", "Price =", current_price, "Quantity =", qty)
-        elif z_score > 2.8:
-            qty = status.possible_sell_amt
-            orders.append(Order(CROISSANTS, int(current_price), -qty))
-            logger.print("EMA Signal: SELL CROISSANTS", "Price =", current_price, "Quantity =", qty)
-        else:
-            logger.print("EMA Signal: No action (z-score within threshold).")
-            
-        return orders
-    
-    @staticmethod
-    def voucher_trade(voucher_state: 'Status', strike: float, round_number: int, current_timestamp: int) -> List[Order]:
-        return Strategy.voucher_trade(voucher_state, strike, round_number, current_timestamp)
-    
-
-    @staticmethod
-    def volcanic_rock(state: Status) -> list[Order]:
-        current_price = state.mid
-        if state.position < 0 and state.position < -int(state.position_limit * 0.5):
-            logger.print("Stop-loss active on VOLCANIC_ROCK: reducing order size")
-            order_qty = 1
-            return [Order(state.product, int(current_price), -order_qty)]
-        orders = []
-        orders.extend(Strategy.arb(state=state, fair_price=current_price))
-        orders.extend(Strategy.mm_ou(state=state, fair_price=current_price, gamma=1e-9, order_amount=50))
-        return orders
 
     
 class Trader:
-    state_resin = Status("RAINFOREST_RESIN")
-    state_kelp = Status("KELP")
-    state_squink = Status("SQUID_INK")
+    status_objects: Dict[str, Status] = {}
+    params = StrategyParameters()
     state_croiss = Status("CROISSANTS")
     state_jam = Status("JAMS")
     state_djembes = Status("DJEMBES")
     state_picnic1 = Status("PICNIC_BASKET1")
     state_picnic2 = Status("PICNIC_BASKET2")
-    state_voucher_9500 = Status("VOLCANIC_ROCK_VOUCHER_9500")
-    state_voucher_9750 = Status("VOLCANIC_ROCK_VOUCHER_9750")
-    state_voucher_10000 = Status("VOLCANIC_ROCK_VOUCHER_10000")
-    state_voucher_10250 = Status("VOLCANIC_ROCK_VOUCHER_10250")
-    state_voucher_10500 = Status("VOLCANIC_ROCK_VOUCHER_10500")
-    state_volcanic_rock = Status("VOLCANIC_ROCK")
-    
-    last_vol_coeffs = None
-    voucher_deltas = {}
-    
-    VOL_PARAMS = {
-        "std_window": 5,
-        "mean_volatility": {
-            '9500': 0.129, '9750': 0.159, '10000': 0.149, '10250': 0.138, '10500': 0.142 # Use STRINGS
-        },
-        "zscore_threshold": 2.0,
-        "trade_size": 20,
-    }
 
     def run(self, state: TradingState) -> tuple[dict[Symbol, list[Order]], int, str]:
         Status.cls_update(state)
-        round_number = 3
-        current_timestamp = state.timestamp
 
         result = {}
-
-        # Round 1 orders:
-        result["RAINFOREST_RESIN"] = Trade.resin(self.state_resin)
-        result["KELP"] = Trade.kelp(self.state_kelp)
-        result["SQUID_INK"] = Trade.ema_mean_reversion(self.state_squink)
-
-        # Round 2 orders:
-        result["PICNIC_BASKET1"] = Trade.basket_1(self.state_picnic1, self.state_jam, self.state_djembes, self.state_croiss)
-        result["JAMS"] = Trade.jams(self.state_jam)
-        result["PICNIC_BASKET2"] = Trade.basket_2(self.state_picnic2, self.state_jam, self.state_djembes, self.state_croiss)
-
-        # Round 3 orders:
-        voucher_symbols = [
-            "VOLCANIC_ROCK_VOUCHER_9500", "VOLCANIC_ROCK_VOUCHER_9750",
-            "VOLCANIC_ROCK_VOUCHER_10000", "VOLCANIC_ROCK_VOUCHER_10250",
-            "VOLCANIC_ROCK_VOUCHER_10500"
-        ]
-        strikes = {sym: int(sym.split('_')[-1]) for sym in voucher_symbols}
-
-        try:
-            voucher_states = {sym: getattr(self, f"state_voucher_{strikes[sym]}") for sym in voucher_symbols}
-            volcanic_state = self.state_volcanic_rock # Direct access assuming it exists
-        except AttributeError as e:
-            logger.print(f"CRITICAL ERROR: Missing state attribute for Volcanic strategy: {e}")
-            logger.flush(state, result, 0, "")
-            return result, 0, "" 
-        
-        traderData = {}
-        if state.traderData:
-            try:
-                traderData = jsonpickle.decode(state.traderData)
-            except Exception as e:
-                logger.print(f"Error decoding traderData: {e}")
-                traderData = {}
-        
-        if 'base_iv_history' not in traderData:
-             traderData['base_iv_history'] = [] 
-        
-        try:
-            spot_volcanic = volcanic_state.mid 
-            TTE = compute_time_to_expiry(round_number, current_timestamp)
-            r = 0.0 
-            if TTE <= 1e-9: raise ValueError("Time to expiry too small")
-            if spot_volcanic is None or spot_volcanic <= 0: raise ValueError("Invalid underlying spot price")
-        except Exception as e:
-            logger.print(f"Error getting Volcanic inputs or TTE: {e}. Skipping Volcanic strategy.")
-            final_trader_data = ""
-            try: final_trader_data = jsonpickle.encode(traderData)
-            except Exception: pass
-            logger.flush(state, result, 0, final_trader_data)
-            return result, 0, final_trader_data
-
-        m_values_now = []
-        v_values_now = []
-        valid_strikes_for_fit = []
-        voucher_data = {} 
-
-        for symbol in voucher_symbols:
-            voucher_state = voucher_states[symbol]
-            K = strikes[symbol]
-
-            try:
-                market_price = voucher_state.mid 
-                if market_price is None or market_price <= 0: continue 
-
-                intrinsic_value = max(spot_volcanic - K * math.exp(-r * TTE), 0.0)
-                tolerance = 0.01
-                actual_v_t = np.nan
-                m_t = np.nan
-
-                if market_price > (intrinsic_value + tolerance):
-                    actual_v_t = implied_volatility(market_price, spot_volcanic, K, round_number, current_timestamp, r)
-                    m_t = compute_m_t(spot_volcanic, K, TTE)
-
-                if m_t is not None and not np.isnan(m_t) and actual_v_t is not None and not np.isnan(actual_v_t):
-                    m_values_now.append(m_t)
-                    v_values_now.append(actual_v_t)
-                    valid_strikes_for_fit.append(K)
-                    voucher_data[K] = {'symbol': symbol, 'm_t': m_t, 'v_t': actual_v_t, 'market_price': market_price}
-
-                current_delta = np.nan
-                if actual_v_t is not None and not np.isnan(actual_v_t) and actual_v_t > 1e-6:
-                    current_delta = calculate_delta(spot_volcanic, K, TTE, r, actual_v_t)
-                else:
-                    current_delta = 1.0 if spot_volcanic > K else 0.0 
-                self.voucher_deltas[symbol] = current_delta 
-
-            except Exception as e:
-                logger.print(f"Error processing {symbol} (strike {K}) during m/v/delta calc: {e}")
-                self.voucher_deltas.pop(symbol, None) 
-
-        coeffs = None
-        fitted_curve = None
-        if len(m_values_now) >= 3: 
-            try:
-                coeffs = fit_parabolic(np.array(m_values_now), np.array(v_values_now))
-                fitted_curve = np.poly1d(coeffs)
-                base_iv = coeffs[2]
-                traderData['base_iv_history'].append(base_iv) 
-                logger.print(f"Smile Fit: Base IV={base_iv:.4f}, Coeffs={coeffs}")
-            except Exception as e:
-                logger.print(f"Error fitting parabola: {e}")
-
-        trade_candidates = []
-        if fitted_curve is not None: 
-            vol_difference_threshold = 0.01 
-
-            for strike in valid_strikes_for_fit:
-                data = voucher_data[strike]
-                m_t = data['m_t']
-                actual_v_t = data['v_t']
-                fitted_v = fitted_curve(m_t)
-                difference = actual_v_t - fitted_v
-                data['fitted_v'] = fitted_v 
-                data['difference'] = difference
-
-                if difference < -vol_difference_threshold:
-                    trade_candidates.append({'type': 'BUY', 'strike': strike, 'diff': difference, 'symbol': data['symbol']})
-                elif difference > vol_difference_threshold:
-                    trade_candidates.append({'type': 'SELL', 'strike': strike, 'diff': difference, 'symbol': data['symbol']})
-
-        temp_voucher_orders = {sym: [] for sym in voucher_symbols} 
-        net_voucher_delta_change = 0.0 
-        trade_quantity = 20 
-
-        buy_candidates = sorted([c for c in trade_candidates if c['type'] == 'BUY'], key=lambda x: x['diff'])
-        sell_candidates = sorted([c for c in trade_candidates if c['type'] == 'SELL'], key=lambda x: x['diff'], reverse=True)
-
-        # Execute best pair trade if possible
-        if buy_candidates and sell_candidates:
-            buy_info = buy_candidates[0]
-            sell_info = sell_candidates[0]
-            buy_symbol = buy_info['symbol']
-            sell_symbol = sell_info['symbol']
-            buy_state = voucher_states[buy_symbol]
-            sell_state = voucher_states[sell_symbol]
-
-            qty_to_buy = min(trade_quantity, buy_state.possible_buy_amt)
-            qty_to_sell = min(trade_quantity, sell_state.possible_sell_amt)
-
-            if qty_to_buy > 0 and qty_to_sell > 0:
-                buy_price = buy_state.best_ask
-                if buy_price is not None:
-                    buy_order = Order(buy_symbol, buy_price, qty_to_buy)
-                    temp_voucher_orders[buy_symbol].append(buy_order)
-                    net_voucher_delta_change += self.voucher_deltas.get(buy_symbol, 0.0) * qty_to_buy
-                    logger.print(f"-> SMILE BUY {buy_symbol} @ {buy_price} x {qty_to_buy} (Diff={buy_info['diff']:.3f})")
-
-                sell_price = sell_state.best_bid
-                if sell_price is not None:
-                    sell_order = Order(sell_symbol, sell_price, -qty_to_sell)
-                    temp_voucher_orders[sell_symbol].append(sell_order)
-                    net_voucher_delta_change += self.voucher_deltas.get(sell_symbol, 0.0) * (-qty_to_sell)
-                    logger.print(f"-> SMILE SELL {sell_symbol} @ {sell_price} x {qty_to_sell} (Diff={sell_info['diff']:.3f})")
-
-        current_portfolio_delta = 0.0
-        for symbol in voucher_symbols:
-            position = voucher_states[symbol].position if symbol in state.position else 0
-            delta = self.voucher_deltas.get(symbol, 0.0)
-            current_portfolio_delta += position * delta
-
-        total_target_delta = current_portfolio_delta + net_voucher_delta_change
-        target_hedge_position = -round(total_target_delta)
-        current_hedge_position = volcanic_state.position
-        hedge_order_qty = target_hedge_position - current_hedge_position
-
-        hedge_limit = volcanic_state.position_limit
-        if hedge_order_qty > 0: hedge_order_qty = min(hedge_order_qty, hedge_limit - current_hedge_position)
-        elif hedge_order_qty < 0: hedge_order_qty = max(hedge_order_qty, -hedge_limit - current_hedge_position)
-
-        if abs(hedge_order_qty) > 0:
-            best_bid_vr = volcanic_state.best_bid
-            best_ask_vr = volcanic_state.best_ask
-            hedge_price = None
-            if hedge_order_qty > 0 and best_ask_vr is not None: hedge_price = best_ask_vr
-            elif hedge_order_qty < 0 and best_bid_vr is not None: hedge_price = best_bid_vr
-
-            if hedge_price is not None :
-                hedge_order = Order("VOLCANIC_ROCK", hedge_price, hedge_order_qty)
-                if "VOLCANIC_ROCK" not in result: result["VOLCANIC_ROCK"] = []
-                result["VOLCANIC_ROCK"].append(hedge_order)
-        
-
-        for symbol, orders_list in temp_voucher_orders.items():
-            if orders_list:
-                if symbol not in result: result[symbol] = []
-                result[symbol].extend(orders_list)
-        
+        for product in state.listings:
+             if product not in self.status_objects:
+                  self.status_objects[product] = Status(product)
+        result: Dict[str, List[Order]] = {}
         conversions = 0
-        final_trader_data = ""
+        traderData = ""
+
+        pb1_status = self.status_objects.get('PICNIC_BASKET1')
+        c_status = self.status_objects.get('CROISSANTS')
+        j_status = self.status_objects.get('JAMS')
+        d_status = self.status_objects.get('DJEMBES')
+
+        if all([pb1_status, c_status, j_status, d_status]): # Check if all needed Status objects exist
+            pb1_arb_orders = Strategy.stat_arb(pb1_status, c_status, j_status, d_status)
+            for product, order_list in pb1_arb_orders.items():
+                result.setdefault(product, []).extend(order_list)
+
+        conversions = 0 
+        traderData = ""
         try:
-            if 'base_iv_history' in traderData and len(traderData['base_iv_history']) > 100: 
-                 traderData['base_iv_history'] = traderData['base_iv_history'][-100:]
             final_trader_data = jsonpickle.encode(traderData)
         except Exception as e:
             logger.print(f"Error encoding traderData: {e}")
