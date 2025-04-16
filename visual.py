@@ -1291,7 +1291,7 @@ class Trader:
 
         # 4. Calculate Fitted Prices and Deltas (using fitted_v) & Generate Voucher Orders
         net_voucher_delta_change = 0.0
-        threshold = 35 # Example threshold for mispricing signal (tune this)
+        threshold = 5 # Example threshold for mispricing signal (tune this)
 
         for symbol in voucher_symbols:
             symbol_orders = []
@@ -1327,7 +1327,7 @@ class Trader:
                         qty = voucher_state.possible_buy_amt
                         if qty > 0:
                             # Aggressive buy: offer slightly above market mid or at fitted price? Test this.
-                            order_price = int(math.ceil(market_price + 0.5)) # Example: round up mid
+                            order_price = int(math.ceil(market_price + 1)) # Example: round up mid
                             order = Order(symbol, order_price, qty)
                             symbol_orders.append(order)
                             net_voucher_delta_change += delta * qty # Accumulate delta change
@@ -1336,7 +1336,7 @@ class Trader:
                         qty = voucher_state.possible_sell_amt
                         if qty > 0:
                             # Aggressive sell: offer slightly below market mid
-                            order_price = int(math.floor(market_price - 0.5)) # Example: round down mid
+                            order_price = int(math.floor(market_price - 1)) # Example: round down mid
                             order = Order(symbol, order_price, -qty)
                             symbol_orders.append(order)
                             # Delta change is delta * (-qty) = -delta * qty
