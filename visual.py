@@ -1280,7 +1280,7 @@ class Trader:
                 # v = a*m^2 + b*m + c  <- polyfit returns [a, b, c]
                 fitted_coeffs = np.polyfit(valid_m_values, valid_v_values, 2)
                 self.last_vol_coeffs = fitted_coeffs # Store for traderData
-                base_IV = fitted_coeffs[2] # c term = fitted v_t(m_t=0)
+                base_IV = math.log(fitted_coeffs[2]) # c term = fitted v_t(m_t=0)
                 logger.print(f"Fit Parabola Coeffs (a,b,c): {fitted_coeffs}, Base IV (c) = {base_IV:.4f}")
             except Exception as e:
                 logger.print(f"Error fitting parabola: {e}")
