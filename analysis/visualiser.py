@@ -509,7 +509,7 @@ def main():
                 "and profit and loss (PnL) for individual assets.")
     
     # Load CSV file (update path as needed)
-    orders_df = pd.read_csv('../data/submission_data/zainalgo4.csv', sep=';')
+    orders_df = pd.read_csv('../data/submission_data/rogeralgo3.csv', sep=';')
     orders_df['day'] = orders_df['day'].astype(int)
     orders_df['timestamp'] = orders_df['timestamp'].astype(int)
     orders_df['mid_price'] = orders_df['mid_price'].astype(float)

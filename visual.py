@@ -1095,11 +1095,11 @@ class Trade:
         logger.print("Croissants EMA Strategy:", "Current Price =", current_price, "EMA =", ema, "Std =", std, "z =", z_score)
         
         orders = []
-        if z_score < -2.8:
+        if z_score < -1:
             qty = status.possible_buy_amt
             orders.append(Order(CROISSANTS, int(current_price), qty))
             logger.print("EMA Signal: BUY CROISSANTS", "Price =", current_price, "Quantity =", qty)
-        elif z_score > 2.8:
+        elif z_score > 1:
             qty = status.possible_sell_amt
             orders.append(Order(CROISSANTS, int(current_price), -qty))
             logger.print("EMA Signal: SELL CROISSANTS", "Price =", current_price, "Quantity =", qty)
@@ -1109,7 +1109,7 @@ class Trade:
         return orders
     
     @staticmethod
-    def voucher_trade(voucher_state: 'Status', strike: float, round_number: int, current_timestamp: int) -> List[Order]:
+    def voucher_trade(voucher_state: Status, strike: float, round_number: int, current_timestamp: int) -> List[Order]:
         return Strategy.voucher_trade(voucher_state, strike, round_number, current_timestamp)
     
 
@@ -1146,11 +1146,11 @@ class Trader:
     voucher_deltas = {}
     
     VOL_PARAMS = {
-        "std_window": 5,
+        "std_window": 3,
         "mean_volatility": {
-            '9500': 0.129, '9750': 0.159, '10000': 0.149, '10250': 0.138, '10500': 0.142 # Use STRINGS
+            '9500': 0.22, '9750': 0.171, '10000': 0.15, '10250': 0.14, '10500': 0.14 # Use STRINGS
         },
-        "zscore_threshold": 2.0,
+        "zscore_threshold": 0.5,
         "trade_size": 20,
     }
 
