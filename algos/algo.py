@@ -892,8 +892,8 @@ class Trader:
 
             order_book_volume = min(basket_bid_volume, synthetic_ask_volume)
             executed_volume = min(order_book_volume, target_quantity)
-            basket_orders = [Order("PICNIC_BASKET1", basket_bid_price, -executed_volume)]
-            synthetic_orders = [Order("SYNTHETIC", synthetic_ask_price, executed_volume)]
+            basket_orders = [Order("PICNIC_BASKET1", basket_bid_price, executed_volume)]
+            synthetic_orders = [Order("SYNTHETIC", synthetic_ask_price, -executed_volume)]
 
             aggregate_orders = self.convert_synthetic_basket_orders(synthetic_orders, order_depths)
 
@@ -1008,9 +1008,9 @@ class Trader:
         Product.SPREAD_PB1: {
             "spread_mean": 32856.62480438185,
             "spread_std" : 11135.827561425862,
-            "spread_std_window" : {{spread_window}},
-            "zscore_threshold" : {{z_thresh}},
-            "target_position": {{targ}}
+            "spread_std_window" : 35,
+            "zscore_threshold" :2.0,
+            "target_position":45
         },
         Product.SPREAD_PB2: {
             "spread_mean" : 12970.22061803445,
