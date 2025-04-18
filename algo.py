@@ -742,6 +742,15 @@ class Trader:
     state_djembes = Status("DJEMBES")
     state_picnic1 = Status("PICNIC_BASKET1")
 
+    Params = {
+        Product.SPREAD_PB1: {
+            "spread_mean": 32856.62480438185,
+            "spread_std" : 11135.827561425862,
+            "spread_std_window" : 45,
+            "zscore_threshold" : 2,
+            "target_position": 48
+        }
+    }
     def get_swmid(self, order_depth) -> float:
         best_bid = max(order_depth.buy_orders.keys())
         best_ask = min(order_depth.sell_orders.keys())
@@ -865,14 +874,14 @@ class Trader:
         
         target_quantity = abs(target_position - basket_position)
         basket_order_depth = order_depths["PICNIC_BASKET1"]
-        synthetic_oder_depth = self.get_synthetic_basket_order_depth(order_depths)
+        synthetic_order_depth = self.get_synthetic_basket_order_depth(order_depths)
 
         if target_position > basket_position:
             basket_ask_price = min(basket_order_depth.sell_orders.keys())
             basket_ask_volume = abs(basket_order_depth.sell_orders[basket_ask_price])
             
-            synthetic_bid_price = max(synthetic_oder_depth.buy_orders.keys())
-            synthetic_bid_volume = abs(synthetic_oder_depth.buy_orders[synthetic_bid_price])
+            synthetic_bid_price = max(synthetic_order_depth.buy_orders.keys())
+            synthetic_bid_volume = abs(synthetic_order_depth.buy_orders[synthetic_bid_price])
 
             orderbook_volume = min(basket_ask_volume, synthetic_bid_volume)
             executed_volume = min(orderbook_volume, target_quantity)
@@ -888,8 +897,8 @@ class Trader:
             basket_bid_price = max(basket_order_depth.buy_orders.keys())
             basket_bid_volume = abs(basket_order_depth.buy_orders[basket_bid_price])
             
-            synthetic_ask_price = min(synthetic_oder_depth.sell_orders.keys())
-            synthetic_ask_volume = abs(synthetic_oder_depth.sell_orders[synthetic_ask_price])
+            synthetic_ask_price = min(synthetic_order_depth.sell_orders.keys())
+            synthetic_ask_volume = abs(synthetic_order_depth.sell_orders[synthetic_ask_price])
 
             order_book_volume = min(basket_bid_volume, synthetic_ask_volume)
             executed_volume = min(order_book_volume, target_quantity)
@@ -901,36 +910,80 @@ class Trader:
             aggregate_orders["PICNIC_BASKET1"] = basket_orders
             return aggregate_orders
         
-    def spread_orders(self, order_depths: Dict[str, OrderDepth], product: Product, basket_position, spread_data: [str, Any]):
-        if Product.PICNIC_BASKET1 not in order_depths.keys():
-            return []
-        
+    def spread_orders(self, order_depths: Dict[str, OrderDepth], product: Product, basket_position, spread_data: Dict[str, Any]): # Explicitly type spread_data
+        required_keys = ["PICNIC_BASKET1", "CROISSANTS", "JAMS", "DJEMBES"]
+        if not all(key in order_depths for key in required_keys):
+             logger.print("Missing required order depths for spread calculation.")
+             return [] 
+
         basket_order_depth = order_depths[Product.PICNIC_BASKET1]
+        if not basket_order_depth.buy_orders or not basket_order_depth.sell_orders:
+             logger.print("Basket order book is empty or one-sided.")
+             return []
+
         synthetic_order_depth = self.get_synthetic_basket_order_depth(order_depths)
+        if not synthetic_order_depth.buy_orders or not synthetic_order_depth.sell_orders:
+             logger.print("Synthetic order book is empty or one-sided.")
+             return []
+
         basket_swmid = self.get_swmid(basket_order_depth)
         synthetic_swmid = self.get_swmid(synthetic_order_depth)
-        spread = synthetic_swmid - basket_swmid
+        logger.print(f"Basket SWMID: {basket_swmid}, Synthetic SWMID: {synthetic_swmid}")
+
+        spread =  basket_swmid - synthetic_swmid
+        logger.print(f"Spread: {spread}")
         spread_data["spread_history"].append(spread)
 
-        if (len(spread_data["spread_history"]) < self.Params[Product.SPREAD_PB1]["spread_std_window"]):
-            return []
-        elif len(spread_data["spread_history"]) > self.Params[Product.SPREAD_PB1]["spread_std_window"]:
+        if len(spread_data["spread_history"]) < self.Params[Product.SPREAD_PB1]["spread_std_window"]:
+            logger.print(f"Spread history length ({len(spread_data['spread_history'])}) less than window ({self.Params[Product.SPREAD_PB1]['spread_std_window']}).")
+            return [] 
+
+        if len(spread_data["spread_history"]) > self.Params[Product.SPREAD_PB1]["spread_std_window"]:
             spread_data["spread_history"].pop(0)
 
-        spread_std = np.std(spread_data["spread_history"])
+        recent_spreads = np.array(spread_data["spread_history"])
+        spread_mean_rolling = np.mean(recent_spreads) 
+        spread_std_rolling = np.std(recent_spreads)
+        logger.print(f"Rolling Spread Mean: {spread_mean_rolling}, Rolling Spread Std: {spread_std_rolling}")
 
-        zscore = (spread - self.Params[Product.SPREAD_PB1]["spread_mean"]) / spread_std
+        if spread_std_rolling < 1e-6: 
+             logger.print("Spread standard deviation is near zero, skipping z-score calculation.")
+             return []
 
-        if zscore >= self.Params[Product.SPREAD_PB1]["threshold"]:
-            if basket_position != -self.Params[Product.SPREAD_PB1]["target_position"]:
-                return self.execute_spread_orders(-self.Params[Product.SPREAD_PB1]["target_position"], basket_position, order_depths)
-        
-        if zscore <= -self.Params[Product.SPREAD_PB1]["threshold"]:
-            if basket_position != self.Params[Product.SPREAD_PB1]["target_position"]:
-                return self.execute_spread_orders(self.Params[Product.SPREAD_PB1]["target_position"], basket_position, order_depths)
-        
-        spread_data["prev_zscore"] = zscore
-        return []
+        # --- Calculate z-score using ROLLING mean and std dev ---
+        zscore = (spread - spread_mean_rolling) / spread_std_rolling
+        logger.print(f"Calculated Z-score: {zscore}")
+
+        spread_data["prev_zscore"] = float(zscore)
+
+        orders_to_execute = [] 
+
+        target_pos = self.Params[Product.SPREAD_PB1]["target_position"] 
+        threshold = self.Params[Product.SPREAD_PB1]["zscore_threshold"]
+
+        if zscore >= threshold:
+         # Spread is high (synthetic expensive) -> Sell Synthetic, Buy Basket
+         # CORRECT ACTION: Target a POSITIVE position in the basket
+         desired_position = target_pos # e.g., +58
+         if basket_position != -desired_position:
+             logger.print(f"Z-score ({zscore:.2f}) >= threshold ({threshold:.2f}). Target: {desired_position} (Buy Basket), Current: {basket_position}. Placing orders.")
+             # Call execute_spread_orders with the CORRECT desired_position
+             orders_to_execute = self.execute_spread_orders(-desired_position, basket_position, order_depths)
+         else:
+             logger.print(f"Z-score ({zscore:.2f}) >= threshold ({threshold:.2f}), but already at target BUY position {basket_position}.")
+
+        elif zscore <= -threshold:
+            # Spread is low (synthetic cheap) -> Buy Synthetic, Sell Basket
+            # CORRECT ACTION: Target a NEGATIVE position in the basket
+            desired_position = target_pos # e.g., -58
+            if basket_position != desired_position:
+                logger.print(f"Z-score ({zscore:.2f}) <= threshold ({-threshold:.2f}). Target: {desired_position} (Sell Basket), Current: {basket_position}. Placing orders.")
+                # *** FIX: Call execute_spread_orders with the CORRECT desired_position ***
+                orders_to_execute = self.execute_spread_orders(desired_position, basket_position, order_depths)
+            else:
+                logger.print(f"Z-score ({zscore:.2f}) <= threshold ({-threshold:.2f}), but already at target SELL position {basket_position}.")
+
+        return orders_to_execute # Return the list/dict of orders (or empty)
 
     @staticmethod
     def convert(state: Status):
@@ -940,57 +993,44 @@ class Trader:
             return -state.position
         else:
             return 0
-    
-    Params = {
-        Product.SPREAD_PB1: {
-            "spread_mean": 32856.62480438185,
-            "spread_std" : 11135.827561425862,
-            "spread_std_window" : 40,
-            "zscore_threshold" : 0,
-            "target_position": 0
-        },
-        Product.SPREAD_PB2: {
-            "spread_mean" : 12970.22061803445,
-            "spread_std" : 5743.741908271134,
-            "spread_std_window" : 40,
-            "zscore_threshold" : 0,
-            "target_position": 0
-        },
-
-    }
 
     def run(self, state: TradingState) -> tuple[dict[Symbol, list[Order]], int, str]:
-        Status.cls_update(state)
+        Status.cls_update(state) # Update global status with the new state
 
         traderObject = {}
         if state.traderData != None and state.traderData != "":
-            traderObject = jsonpickle.decode(state.traderData)
+            try:
+                traderObject = jsonpickle.decode(state.traderData)
+            except Exception as e:
+                logger.print(f"Error decoding traderData: {e}. Initializing with empty object.")
+                traderObject = {}
 
         result = {}
         conversions = 0
-        
+
         if Product.SPREAD_PB1 not in traderObject:
+            logger.print("Initializing traderObject for SPREAD_PB1")
             traderObject[Product.SPREAD_PB1] = {
                 "spread_history": [],
-                "prev_zscore": 0,
+                "prev_zscore": 0.0, # Initialize as float
             }
-            basket_position = (
-                state.position[Product.PICNIC_BASKET1]
-                if Product.PICNIC_BASKET1 in state.position
-                else 0 
-            )
-            spread_orders = self.spread_orders(
-                state.order_depths,
-                Product.PICNIC_BASKET1,
-                basket_position,
-                traderObject[Product.SPREAD_PB1],
-            )
-            if spread_orders != []:
-                result[Product.CROISSANTS] = spread_orders["CROISSANTS"]
-                result[Product.JAMS] = spread_orders["JAMS"]
-                result[Product.DJEMBES] = spread_orders["DJEMBES"]
-                result[Product.PICNIC_BASKET1] = spread_orders["PICNIC_BASKET1"]
+
+        basket_position_pb1 = state.position.get(Product.PICNIC_BASKET1, 0)
+
+        spread_orders_dict_pb1 = self.spread_orders(
+            state.order_depths,
+            Product.PICNIC_BASKET1, # Assuming this indicates which basket to check position for
+            basket_position_pb1,
+            traderObject[Product.SPREAD_PB1], # Pass the relevant dict
+        )
         
+        if spread_orders_dict_pb1: 
+            for product, orders in spread_orders_dict_pb1.items():
+                 if product in result:
+                     result[product].extend(orders)
+                 else:
+                     result[product] = list(orders) 
+
         traderData = jsonpickle.encode(traderObject)
 
         logger.flush(state, result, conversions, traderData)
