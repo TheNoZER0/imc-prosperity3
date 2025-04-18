@@ -313,6 +313,36 @@ def plot_pnl(df, product):
     plt.tight_layout()
     return fig
 
+def plot_mid_price(df, product):
+    """Plot mid_price over time for any product."""
+    series = get_mid_price_series(df, product)
+    fig, ax = plt.subplots(figsize=(12,4))
+    ax.plot(series.index, series, label=f'{product} Mid Price')
+    ax.set_title(f'{product} Mid Price Over Time')
+    ax.set_xlabel('Time')
+    ax.set_ylabel('Mid Price')
+    ax.legend()
+    ax.xaxis.set_major_locator(ticker.MaxNLocator(nbins=10))
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    return fig
+
+# def plot_cumulative_pnl(df, product):
+#     """Plot cumulative PnL over time for any product."""
+#     pnl = get_pnl_series(df, product)
+#     cum_pnl = pnl.cumsum()
+#     fig, ax = plt.subplots(figsize=(12,4))
+#     ax.plot(cum_pnl.index, cum_pnl, label=f'{product} Cumulative PnL')
+#     ax.set_title(f'{product} Cumulative PnL Over Time')
+#     ax.set_xlabel('Time')
+#     ax.set_ylabel('Cumulative PnL')
+#     ax.legend()
+#     ax.xaxis.set_major_locator(ticker.MaxNLocator(nbins=10))
+#     plt.xticks(rotation=45)
+#     plt.tight_layout()
+#     return fig
+
+
 def get_vwap_for_row(row):
     """
     Compute the volume weighted average price (VWAP) for a given row of order book data
@@ -509,7 +539,7 @@ def main():
                 "and profit and loss (PnL) for individual assets.")
     
     # Load CSV file (update path as needed)
-    orders_df = pd.read_csv('../data/submission_data/rogeralgo3.csv', sep=';')
+    orders_df = pd.read_csv('../data/submission_data/zainalgo.csv', sep=';')
     orders_df['day'] = orders_df['day'].astype(int)
     orders_df['timestamp'] = orders_df['timestamp'].astype(int)
     orders_df['mid_price'] = orders_df['mid_price'].astype(float)
@@ -623,13 +653,37 @@ def main():
     # Display correlation matrix of log returns.
     st.subheader("Correlation Matrix (Log Returns)")
     display_correlation(df_prices[['Basket1', 'Basket2', 'Croissants', 'Jams', 'Djembes']])
+
+    st.header("Volcanic Rock & Vouchers")
+    volcanic_products = [
+        "VOLCANIC_ROCK",
+        "VOLCANIC_ROCK_VOUCHER_9500",
+        "VOLCANIC_ROCK_VOUCHER_9750",
+        "VOLCANIC_ROCK_VOUCHER_10000",
+        "VOLCANIC_ROCK_VOUCHER_10250",
+        "VOLCANIC_ROCK_VOUCHER_10500",
+    ]
+    for prod in volcanic_products:
+        st.subheader(prod)
+        st.pyplot(plot_mid_price(orders_df, prod))
+
+    st.header("Macarons")
+    macarons = "MAGNIFICENT_MACARONS"
+    st.subheader(macarons)
+    st.pyplot(plot_mid_price(orders_df, macarons))
+   
     
     st.header("Profit and Loss (PnL)")
     st.markdown("PnL (profit_and_loss) over time for individual assets.")
-    asset = st.selectbox("Select asset for PnL plot:", ["CROISSANTS", "JAMS", "DJEMBES", "PICNIC_BASKET1", "PICNIC_BASKET2", "SQUID_INK", "RAINFOREST_RESIN", "KELP"])
+    asset = st.selectbox("Select asset for PnL plot:", ["CROISSANTS", "JAMS", "DJEMBES", "PICNIC_BASKET1", "PICNIC_BASKET2", "SQUID_INK", "RAINFOREST_RESIN", 
+                                                        "KELP", "VOLCANIC_ROCK", "MAGNIFICENT_MACARONS", "VOLCANIC_ROCK_VOUCHER_9500",
+                                                        "VOLCANIC_ROCK_VOUCHER_9750", "VOLCANIC_ROCK_VOUCHER_10000",
+                                                        "VOLCANIC_ROCK_VOUCHER_10250", "VOLCANIC_ROCK_VOUCHER_10500"])
 
     pnl_fig = plot_pnl(orders_df, asset)
     st.pyplot(pnl_fig)
+
+
     
     st.markdown("### End of Visualisation")
     
