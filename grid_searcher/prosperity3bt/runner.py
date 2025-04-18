@@ -6,7 +6,16 @@ from IPython.utils.io import Tee
 from tqdm import tqdm
 
 from prosperity3bt.data import LIMITS, BacktestData, read_day_data
-from prosperity3bt.datamodel import Listing, Observation, Order, OrderDepth, Symbol, Trade, TradingState
+from prosperity3bt.datamodel import (
+    ConversionObservation,
+    Listing,
+    Observation,
+    Order,
+    OrderDepth,
+    Symbol,
+    Trade,
+    TradingState,
+)
 from prosperity3bt.file_reader import FileReader
 from prosperity3bt.models import (
     ActivityLogRow,
@@ -32,6 +41,25 @@ def prepare_state(state: TradingState, data: BacktestData) -> None:
         state.order_depths[product] = order_depth
 
         state.listings[product] = Listing(product, product, 1)
+
+    observation_row = data.observations.get(state.timestamp)
+
+    if observation_row is None:
+        state.observations = Observation({}, {})
+    else:
+        conversion_observation = ConversionObservation(
+            bidPrice=observation_row.bidPrice,
+            askPrice=observation_row.askPrice,
+            transportFees=observation_row.transportFees,
+            exportTariff=observation_row.exportTariff,
+            importTariff=observation_row.importTariff,
+            sugarPrice=observation_row.sugarPrice,
+            sunlightIndex=observation_row.sunlightIndex,
+        )
+
+        state.observations = Observation(
+            plainValueObservations={}, conversionObservations={"MAGNIFICENT_MACARONS": conversion_observation}
+        )
 
 
 def type_check_orders(orders: dict[Symbol, list[Order]]) -> None:

@@ -123,13 +123,17 @@ if __name__ == '__main__':
         # "cross_ema": [i for i in range(5,100,2)],
         # "alpha_ema": [i for i in np.arange(0, 1, 0.05)],
         # "threshold_ema": [i for i in np.arange(0,30, 0.5)]
-        "threshold_volc": [i for i in np.arange(31, 37, 0.05)],
+        #"threshold_volc": [i for i in np.arange(31, 37, 0.05)],
+        "parity": [i for i in np.arange(0, 20, 2)],
+        "exit_m": [i for i in np.arange(0, 20, 2)],
+        "stop_thresh": [i for i in np.arange(0, 20, 2)],
+
     }
     
     results = grid_search_backtest(
-        algorithm_file_path=r"../visual.py",
+        algorithm_file_path=r"../algos/zain.py",
         grid=grid,
-        rounds=["3"],
+        rounds=["4"],
         data_path=None
     )
     
