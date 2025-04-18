@@ -192,11 +192,11 @@ class Logger:
             conversion_observations[product] = [
                 observation.bidPrice,
                 observation.askPrice,
-                observation.transportFees,
-                observation.exportTariff,
-                observation.importTariff,
-                observation.sunlight,
-                observation.humidity,
+                # observation.transportFees,
+                # observation.exportTariff,
+                # observation.importTariff,
+                # observation.sunlight,
+                # observation.humidity,
             ]
 
         return [observations.plainValueObservations, conversion_observations]
@@ -287,24 +287,6 @@ class Status:
     }
 
     _num_data = 0
-
-    Params = {
-        Product.SPREAD_PB1: {
-            "spread_mean": 32856.62480438185,
-            "spread_std" : 11135.827561425862,
-            "spread_std_window" : 40,
-            "zscore_threshold" : 0,
-            "target_position": 0
-        },
-        Product.SPREAD_PB2: {
-            "spread_mean" : 12970.22061803445,
-            "spread_std" : 5743.741908271134,
-            "spread_std_window" : 40,
-            "zscore_threshold" : 0,
-            "target_position": 0
-        },
-
-    }
 
     _basket_weights_1 = {
         "CROISSANTS": 6,
@@ -571,15 +553,6 @@ class Status:
 
         return res_array
     
-    def get_swmid(self, order_depth) -> float:
-        best_bid = max(order_depth.buy_orders.keys())
-        best_ask = min(order_depth.sell_orders.keys())
-        best_bid_vol = abs(order_depth.buy_orders[best_bid])
-        best_ask_vol = abs(order_depth.sell_orders[best_ask])
-        return (best_bid * best_ask_vol + best_ask * best_bid_vol) / (
-            best_bid_vol + best_ask_vol
-        )
-    
     def hist_vwap_all(self, size:int) -> np.ndarray:
         res_array = np.zeros(size)
         volsum_array = np.zeros(size)
@@ -768,6 +741,15 @@ class Trader:
     state_jam = Status("JAMS")
     state_djembes = Status("DJEMBES")
     state_picnic1 = Status("PICNIC_BASKET1")
+
+    def get_swmid(self, order_depth) -> float:
+        best_bid = max(order_depth.buy_orders.keys())
+        best_ask = min(order_depth.sell_orders.keys())
+        best_bid_vol = abs(order_depth.buy_orders[best_bid])
+        best_ask_vol = abs(order_depth.sell_orders[best_ask])
+        return (best_bid * best_ask_vol + best_ask * best_bid_vol) / (
+            best_bid_vol + best_ask_vol
+        )
     
     def get_synthetic_basket_order_depth(self, order_depths: Dict[str, OrderDepth]) -> OrderDepth:
         synthetic_order_price = OrderDepth()
@@ -923,7 +905,7 @@ class Trader:
         if Product.PICNIC_BASKET1 not in order_depths.keys():
             return []
         
-        basket_order_depth = Product.PICNIC_BASKET1
+        basket_order_depth = order_depths[Product.PICNIC_BASKET1]
         synthetic_order_depth = self.get_synthetic_basket_order_depth(order_depths)
         basket_swmid = self.get_swmid(basket_order_depth)
         synthetic_swmid = self.get_swmid(synthetic_order_depth)
@@ -958,6 +940,25 @@ class Trader:
             return -state.position
         else:
             return 0
+    
+    Params = {
+        Product.SPREAD_PB1: {
+            "spread_mean": 32856.62480438185,
+            "spread_std" : 11135.827561425862,
+            "spread_std_window" : 40,
+            "zscore_threshold" : 0,
+            "target_position": 0
+        },
+        Product.SPREAD_PB2: {
+            "spread_mean" : 12970.22061803445,
+            "spread_std" : 5743.741908271134,
+            "spread_std_window" : 40,
+            "zscore_threshold" : 0,
+            "target_position": 0
+        },
+
+    }
+
     def run(self, state: TradingState) -> tuple[dict[Symbol, list[Order]], int, str]:
         Status.cls_update(state)
 
