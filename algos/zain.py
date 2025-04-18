@@ -1184,11 +1184,11 @@ class Trade:
         """
         # --- Parameters ---
         # How much the price must deviate from parity to enter a trade
-        PARITY_MARGIN = {{parity}} # Original value, tune as needed
+        PARITY_MARGIN = 0.3 # Original value, tune as needed
         # How close the price must get back to parity to take profit
-        EXIT_MARGIN = {{exit_m}}   # New parameter for take-profit, tune as needed
+        EXIT_MARGIN = 1   # New parameter for take-profit, tune as needed
         # How far the mid-price must move against the position *beyond* parity to trigger stop-loss
-        STOP_THRESH = max({{stop_thresh}}, int((state.best_ask - state.best_bid) * 2)) # Original calculation, potentially tune
+        STOP_THRESH = max(2, int((state.best_ask - state.best_bid) * 2)) # Original calculation, potentially tune
         STORAGE_COST = 0.1
         CONVERSION_LIMIT = 10 # Max conversions per tick
 

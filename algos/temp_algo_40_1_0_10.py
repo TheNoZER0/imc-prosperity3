@@ -1008,9 +1008,9 @@ class Trader:
         Product.SPREAD_PB1: {
             "spread_mean": 32856.62480438185,
             "spread_std" : 11135.827561425862,
-            "spread_std_window" : {{spread_window}},
-            "zscore_threshold" : {{z_thresh}},
-            "target_position": {{targ}}
+            "spread_std_window" : 40,
+            "zscore_threshold" : 1.0,
+            "target_position": 10
         },
         Product.SPREAD_PB2: {
             "spread_mean" : 12970.22061803445,

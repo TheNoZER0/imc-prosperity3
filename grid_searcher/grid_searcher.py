@@ -126,7 +126,7 @@ if __name__ == '__main__':
         #"threshold_volc": [i for i in np.arange(31, 37, 0.05)],
         "spread_window": [i for i in range(10, 50, 10)],
         "z_thresh": [i for i in np.arange(0, 3, 0.5)],
-        "targ": [i for i in np.arange(0, 50, 5)],
+        "targ": [i for i in np.arange(0, 50, 10)],
 
     }
     
