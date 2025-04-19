@@ -993,12 +993,12 @@ CROISSANTS = "CROISSANTS"
 EMA_PERIOD = 13
 PARITY_MARGIN = 0.5
 class Trade:
-    CSI = 50                     # Critical Sunlight Index
+    CSI = 25                    # Critical Sunlight Index
     STORAGE_COST = 0.1           # Per unit per timestamp
     CONVERSION_LIMIT = 10        # Max conversions per tick (assumed from convert_macarons)
-    HOLD_TIME_ESTIMATE = 10      # Estimated timestamps to hold for arb storage cost calc
-    ARB_PROFIT_MARGIN = 10
-    LONG_PERIOD_THRESHOLD = 50
+    HOLD_TIME_ESTIMATE = 5      # Estimated timestamps to hold for arb storage cost calc
+    ARB_PROFIT_MARGIN = 19
+    LONG_PERIOD_THRESHOLD = 24
     mid_price_history = {CROISSANTS: []}
     macarons_history = {
         "mid": [],
@@ -1158,7 +1158,7 @@ class Trade:
     
     @staticmethod
     
-    def macaron_volume(state: Status, vol_thresh: float = 1.9) -> List[Order]:
+    def macaron_volume(state: Status, vol_thresh: float = 1.35) -> List[Order]:
         orders = []
         # Calculate total volume on bid and ask sides
         bid_vol = sum(amt for _, amt in state.bids)
@@ -1175,7 +1175,7 @@ class Trade:
                 obs = state._state.observations.conversionObservations.get("MAGNIFICENT_MACARONS")
                 if obs:
                     pristine_cost = obs.askPrice + obs.importTariff + obs.transportFees + (Trade.STORAGE_COST * Trade.HOLD_TIME_ESTIMATE)
-                    if best_ask_price > pristine_cost + Trade.ARB_PROFIT_MARGIN * 5: # Don't buy locally if way overpriced vs pristine + hold cost
+                    if best_ask_price > pristine_cost + Trade.ARB_PROFIT_MARGIN * 1.4: # Don't buy locally if way overpriced vs pristine + hold cost
                          logger.print(f"Macaron Volume Signal: Skipped BUYING {qty_to_buy} at {best_ask_price} (price too high vs pristine cost {pristine_cost:.2f})")
                          return orders
 
@@ -1267,7 +1267,7 @@ class Trade:
                 best_ask_price = state.best_ask
                 if best_ask_price is not None:
                     # Avoid panic buying if local price is excessively high vs pristine
-                    if best_ask_price > pristine_buy_cost + estimated_storage + Trade.ARB_PROFIT_MARGIN * 10:
+                    if best_ask_price > pristine_buy_cost + estimated_storage + Trade.ARB_PROFIT_MARGIN * 1.2:
                          logger.print(f"Panic Mode: Skipped BUYING {qty_to_buy_panic} at {best_ask_price} (price too high vs pristine cost {pristine_buy_cost + estimated_storage:.2f})")
                     else:
                         local_orders.append(Order(state.product, int(best_ask_price), qty_to_buy_panic))

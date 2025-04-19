@@ -124,11 +124,13 @@ if __name__ == '__main__':
         # "alpha_ema": [i for i in np.arange(0, 1, 0.05)],
         # "threshold_ema": [i for i in np.arange(0,30, 0.5)]
         #"threshold_volc": [i for i in np.arange(31, 37, 0.05)],
-        "hold": [i for i in range(5, 20, 2)],
-        "arb": [i for i in range(5, 30, 2)],
-        "longp": [i for i in range(10, 50, 5)]
-
-    }
+        "hold": [i for i in range(5, 20, 5)],
+        #"arb": [i for i in range(5, 40, 2)],
+        "longp": [i for i in range(10, 50, 2)]
+        # "volthresh": [i for i in np.arange(0.5, 1.5, 0.1)],
+        # "csi": [i for i in np.arange(20, 50, 5)],
+        #"panic": [i for i in np.arange(1, 10, 0.2)],
+    }   
     
     results = grid_search_backtest(
         algorithm_file_path=r"../algos/zain.py",
