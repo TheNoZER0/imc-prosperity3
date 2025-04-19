@@ -1156,47 +1156,55 @@ class Trade:
         orders.extend(Strategy.mm_ou(state=state, fair_price=current_price, gamma=1e-9, order_amount=50))
         return orders
     
+    RATIO_WINDOW = 200
+    MIN_LIQ      = 40
+    ratio_hist   = []
+
     @staticmethod
-    
-    def macaron_volume(state: Status, vol_thresh: float = 1.35) -> List[Order]:
-        orders = []
-        # Calculate total volume on bid and ask sides
+    def macaron_volume(state: Status) -> List[Order]:
+        orders: List[Order] = []
+
+        # 1) compute book volumes
         bid_vol = sum(amt for _, amt in state.bids)
-        ask_vol = sum(-amt for _, amt in state.asks) # ask amounts are negative
+        ask_vol = sum(-amt for _, amt in state.asks)
+        if ask_vol == 0:
+            return orders
 
-        logger.print(f"Macaron Volume: Bid Vol={bid_vol}, Ask Vol={ask_vol}")
+        # 2) update & trim ratio history
+        ratio = bid_vol / ask_vol
+        Trade.ratio_hist.append(ratio)
+        if len(Trade.ratio_hist) > Trade.RATIO_WINDOW:
+            Trade.ratio_hist.pop(0)
 
-        # If bids significantly outweigh asks, buy at best ask
-        if bid_vol > vol_thresh * ask_vol and state.possible_buy_amt > 0:
-            best_ask_price = state.best_ask
-            if best_ask_price is not None: # Ensure there is an ask price
-                qty_to_buy = state.possible_buy_amt
-                # Avoid buying if best ask is much higher than pristine cost (simple hold cost check)
-                obs = state._state.observations.conversionObservations.get("MAGNIFICENT_MACARONS")
-                if obs:
-                    pristine_cost = obs.askPrice + obs.importTariff + obs.transportFees + (Trade.STORAGE_COST * Trade.HOLD_TIME_ESTIMATE)
-                    if best_ask_price > pristine_cost + Trade.ARB_PROFIT_MARGIN * 1.4: # Don't buy locally if way overpriced vs pristine + hold cost
-                         logger.print(f"Macaron Volume Signal: Skipped BUYING {qty_to_buy} at {best_ask_price} (price too high vs pristine cost {pristine_cost:.2f})")
-                         return orders
+        # 3) need enough samples
+        if len(Trade.ratio_hist) < 20:
+            logger.print("Macaron Volume: warming up, need more history")
+            return orders
 
-                orders.append(Order(state.product, int(best_ask_price), qty_to_buy))
-                logger.print(f"Macaron Volume Signal: BUYING {qty_to_buy} at {best_ask_price} (Bid Vol > Ask Vol)")
-            else:
-                 logger.print("Macaron Volume Signal: Wants to BUY but no asks available.")
+        # 4) compute adaptive thresholds
+        μ     = np.mean(Trade.ratio_hist)
+        σ     = np.std(Trade.ratio_hist)
+        upper = μ + σ
+        lower = μ - σ
 
+        logger.print(f"Macaron Volume: ratio={ratio:.2f}, μ={μ:.2f}, σ={σ:.2f}, window=[>{upper:.2f}|<{lower:.2f}]")
 
-        # If asks significantly outweigh bids, sell at best bid
-        elif ask_vol > vol_thresh * bid_vol and state.possible_sell_amt > 0:
-            best_bid_price = state.best_bid
-            if best_bid_price is not None: # Ensure there is a bid price
-                qty_to_sell = state.possible_sell_amt
-                orders.append(Order(state.product, int(best_bid_price), -qty_to_sell))
-                logger.print(f"Macaron Volume Signal: SELLING {qty_to_sell} at {best_bid_price} (Ask Vol > Bid Vol)")
-            else:
-                logger.print("Macaron Volume Signal: Wants to SELL but no bids available.")
+        # 5a) BUY signal
+        if ratio > upper and bid_vol >= Trade.MIN_LIQ and state.possible_buy_amt > 0:
+            px  = state.best_ask
+            qty = state.possible_buy_amt
+            orders.append(Order(state.product, int(px), qty))
+            logger.print(f"ENTER BUY {qty}@{px}  (ratio>{upper:.2f})")
+
+        # 5b) SELL signal
+        elif ratio < lower and ask_vol >= Trade.MIN_LIQ and state.possible_sell_amt > 0:
+            px  = state.best_bid
+            qty = state.possible_sell_amt
+            orders.append(Order(state.product, int(px), -qty))
+            logger.print(f"ENTER SELL {qty}@{px}  (ratio<{lower:.2f})")
 
         else:
-            logger.print("Macaron Volume Signal: No strong volume imbalance detected.")
+            logger.print("Macaron Volume: no adaptive‑depth signal")
 
         return orders
     
