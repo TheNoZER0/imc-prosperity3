@@ -962,7 +962,7 @@ class Trader:
 
         if zscore >= threshold:
              # Spread is high (synthetic expensive relative to basket) -> Sell synthetic, Buy basket
-             desired_position = -target_pos # Target position for the basket
+             desired_position = target_pos # Target position for the basket
              if basket_position != desired_position:
                   logger.print(f"Z-score ({zscore:.2f}) >= threshold ({threshold:.2f}). Target: {desired_position}, Current: {basket_position}. Placing orders.")
                   orders_to_execute = self.execute_spread_orders(desired_position, basket_position, order_depths)
@@ -972,7 +972,7 @@ class Trader:
 
         elif zscore <= -threshold:
              # Spread is low (synthetic cheap relative to basket) -> Buy synthetic, Sell basket
-             desired_position = target_pos # Target position for the basket
+             desired_position = -target_pos # Target position for the basket
              if basket_position != desired_position:
                   logger.print(f"Z-score ({zscore:.2f}) <= threshold ({-threshold:.2f}). Target: {desired_position}, Current: {basket_position}. Placing orders.")
                   orders_to_execute = self.execute_spread_orders(desired_position, basket_position, order_depths)
@@ -1009,7 +1009,7 @@ class Trader:
             "spread_mean": 32856.62480438185,
             "spread_std" : 11135.827561425862,
             "spread_std_window" : 35,
-            "zscore_threshold" :2.0,
+            "zscore_threshold" :2,
             "target_position":45
         },
         Product.SPREAD_PB2: {
