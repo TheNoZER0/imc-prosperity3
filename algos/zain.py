@@ -1122,14 +1122,13 @@ class Trade:
         if z_score < -2.8:
             qty = status.possible_buy_amt
             orders.append(Order(CROISSANTS, int(current_price), qty))
-            logger.print("EMA Signal: BUY CROISSANTS", "Price =", current_price, "Quantity =", qty)
+            #logger.print("EMA Signal: BUY CROISSANTS", "Price =", current_price, "Quantity =", qty)
         elif z_score > 2.8:
             qty = status.possible_sell_amt
             orders.append(Order(CROISSANTS, int(current_price), -qty))
-            logger.print("EMA Signal: SELL CROISSANTS", "Price =", current_price, "Quantity =", qty)
-        else:
-            logger.print("EMA Signal: No action (z-score within threshold).")
-            
+            #logger.print("EMA Signal: SELL CROISSANTS", "Price =", current_price, "Quantity =", qty)
+        
+            #logger.print("EMA Signal: No action (z-score within threshold).")
         return orders
     
     @staticmethod
@@ -1372,15 +1371,17 @@ class Trader:
 
         result = {}
 
-        # # Round 1 orders:
-        # result["RAINFOREST_RESIN"] = Trade.resin(self.state_resin)
-        # result["KELP"] = Trade.kelp(self.state_kelp)
-        # result["SQUID_INK"] = Trade.ema_mean_reversion(self.state_squink)
+        # Round 1 orders:
+        result["RAINFOREST_RESIN"] = Trade.resin(self.state_resin)
+        result["KELP"] = Trade.kelp(self.state_kelp)
+        result["SQUID_INK"] = Trade.ema_mean_reversion(self.state_squink)
 
-        # # Round 2 orders:
-        # result["PICNIC_BASKET1"] = Trade.basket_1(self.state_picnic1, self.state_jam, self.state_djembes, self.state_croiss)
-        # result["JAMS"] = Trade.jams(self.state_jam)
-        # result["PICNIC_BASKET2"] = Trade.basket_2(self.state_picnic2, self.state_jam, self.state_djembes, self.state_croiss)
+        # Round 2 orders:
+        result["PICNIC_BASKET1"] = Trade.basket_1(self.state_picnic1, self.state_jam, self.state_djembes, self.state_croiss)
+        result["JAMS"] = Trade.jams(self.state_jam)
+        result["PICNIC_BASKET2"] = Trade.basket_2(self.state_picnic2, self.state_jam, self.state_djembes, self.state_croiss)
+        #result["DJEMBES"] = Trade.djmb_crs_pair(self.state_djembes, self.state_croiss)
+        result["CROISSANTS"] = Trade.croissant_ema(self.state_croiss)
 
         # # --- Volcanic Strategy (Round 3) ---
         # # Define voucher symbols, states, and strikes
