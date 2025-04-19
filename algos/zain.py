@@ -991,8 +991,14 @@ class Strategy:
 
 CROISSANTS = "CROISSANTS"
 EMA_PERIOD = 13
-PARITY_MARGIN = 0.5      # Window period for the EMA calculation.
+PARITY_MARGIN = 0.5
 class Trade:
+    CSI = 50                     # Critical Sunlight Index
+    STORAGE_COST = 0.1           # Per unit per timestamp
+    CONVERSION_LIMIT = 10        # Max conversions per tick (assumed from convert_macarons)
+    HOLD_TIME_ESTIMATE = 10      # Estimated timestamps to hold for arb storage cost calc
+    ARB_PROFIT_MARGIN = 10
+    LONG_PERIOD_THRESHOLD = 50
     mid_price_history = {CROISSANTS: []}
     macarons_history = {
         "mid": [],
@@ -1154,34 +1160,142 @@ class Trade:
     
     def macaron_volume(state: Status, vol_thresh: float = 1.9) -> List[Order]:
         orders = []
+        # Calculate total volume on bid and ask sides
         bid_vol = sum(amt for _, amt in state.bids)
-        ask_vol = sum(-amt for _, amt in state.asks)
+        ask_vol = sum(-amt for _, amt in state.asks) # ask amounts are negative
 
-        # If bids out‑size asks by 20%+, go long at the ask
+        logger.print(f"Macaron Volume: Bid Vol={bid_vol}, Ask Vol={ask_vol}")
+
+        # If bids significantly outweigh asks, buy at best ask
         if bid_vol > vol_thresh * ask_vol and state.possible_buy_amt > 0:
-            orders.append(Order(
-                state.product,
-                state.best_ask,
-                state.possible_buy_amt
-            ))
+            best_ask_price = state.best_ask
+            if best_ask_price is not None: # Ensure there is an ask price
+                qty_to_buy = state.possible_buy_amt
+                # Avoid buying if best ask is much higher than pristine cost (simple hold cost check)
+                obs = state._state.observations.conversionObservations.get("MAGNIFICENT_MACARONS")
+                if obs:
+                    pristine_cost = obs.askPrice + obs.importTariff + obs.transportFees + (Trade.STORAGE_COST * Trade.HOLD_TIME_ESTIMATE)
+                    if best_ask_price > pristine_cost + Trade.ARB_PROFIT_MARGIN * 5: # Don't buy locally if way overpriced vs pristine + hold cost
+                         logger.print(f"Macaron Volume Signal: Skipped BUYING {qty_to_buy} at {best_ask_price} (price too high vs pristine cost {pristine_cost:.2f})")
+                         return orders
 
-        # If asks out‑size bids by 20%+, go short at the bid
+                orders.append(Order(state.product, int(best_ask_price), qty_to_buy))
+                logger.print(f"Macaron Volume Signal: BUYING {qty_to_buy} at {best_ask_price} (Bid Vol > Ask Vol)")
+            else:
+                 logger.print("Macaron Volume Signal: Wants to BUY but no asks available.")
+
+
+        # If asks significantly outweigh bids, sell at best bid
         elif ask_vol > vol_thresh * bid_vol and state.possible_sell_amt > 0:
-            orders.append(Order(
-                state.product,
-                state.best_bid,
-                -state.possible_sell_amt
-            ))
+            best_bid_price = state.best_bid
+            if best_bid_price is not None: # Ensure there is a bid price
+                qty_to_sell = state.possible_sell_amt
+                orders.append(Order(state.product, int(best_bid_price), -qty_to_sell))
+                logger.print(f"Macaron Volume Signal: SELLING {qty_to_sell} at {best_bid_price} (Ask Vol > Bid Vol)")
+            else:
+                logger.print("Macaron Volume Signal: Wants to SELL but no bids available.")
+
+        else:
+            logger.print("Macaron Volume Signal: No strong volume imbalance detected.")
 
         return orders
+    
+    @staticmethod
+    def macarons_hybrid_strategy(state: Status, sunlight_index: float, current_conversions_used: int, duration_below_csi: int) -> tuple[List[Order], int]:
+        """
+        Hybrid strategy for Macarons:
+        1. Checks Pristine Cuisine vs Local arbitrage, considering fees and storage cost.
+        2. Applies CSI logic: Panic Buy below CSI, Volume strategy above CSI.
+        3. Manages conversions within limits.
+        """
+        local_orders: List[Order] = []
+        desired_conversions: int = 0
+        remaining_conv_capacity = max(0, Trade.CONVERSION_LIMIT - current_conversions_used)
+
+        obs = state._state.observations.conversionObservations.get("MAGNIFICENT_MACARONS")
+        if not obs:
+            logger.print("ERROR: Macaron observations not found for hybrid strategy.")
+            return [], 0
+
+        # --- 1. Calculate Pristine Costs/Revenues & Storage Impact ---
+        pristine_buy_cost = obs.askPrice + obs.importTariff + obs.transportFees # Cost to buy 1 unit from Pristine
+        pristine_sell_revenue = obs.bidPrice - obs.exportTariff - obs.transportFees # Revenue to sell 1 unit to Pristine
+        estimated_storage = Trade.STORAGE_COST * Trade.HOLD_TIME_ESTIMATE # Estimated storage cost for arb hold
+
+        logger.print(f"Macaron Hybrid: Sun={sunlight_index}, CSI={Trade.CSI}, RemConv={remaining_conv_capacity}")
+        logger.print(f"Pristine Costs: Buy={pristine_buy_cost:.2f}, Sell={pristine_sell_revenue:.2f}, Est.Storage={estimated_storage:.2f}")
+
+        # --- 2. Check Arbitrage Opportunities ---
+
+        # Opportunity: Buy from Pristine (Conversion +), Sell Locally (Order -)
+        total_cost_from_pristine = pristine_buy_cost + estimated_storage
+        local_best_bid = state.best_bid
+        if local_best_bid is not None and local_best_bid > total_cost_from_pristine + Trade.ARB_PROFIT_MARGIN:
+            potential_profit = local_best_bid - total_cost_from_pristine
+            # Determine quantity based on local bid depth, position limit, and conversion limit
+            qty_to_arb = min(state.best_bid_amount, state.possible_buy_amt, remaining_conv_capacity)
+            if qty_to_arb > 0:
+                # Request conversion buy
+                desired_conversions += qty_to_arb
+                remaining_conv_capacity -= qty_to_arb
+                # Place local sell order
+                local_orders.append(Order(state.product, int(local_best_bid), -qty_to_arb))
+                logger.print(f"ARB: Pristine->Local. Profit={potential_profit:.2f}/unit. Request Conv BUY {qty_to_arb}, Place Sell Order @ {local_best_bid}")
+
+        # Opportunity: Buy Locally (Order +), Sell to Pristine (Conversion -)
+        # Note: Storage cost is less critical here as we sell immediately via conversion, but could add margin
+        local_best_ask = state.best_ask
+        if local_best_ask is not None and pristine_sell_revenue > local_best_ask + Trade.ARB_PROFIT_MARGIN:
+             potential_profit = pristine_sell_revenue - local_best_ask
+             # Determine quantity based on local ask depth, position limit, and conversion limit
+             qty_to_arb = min(state.best_ask_amount, state.possible_sell_amt, remaining_conv_capacity)
+             if qty_to_arb > 0:
+                 # Request conversion sell
+                 desired_conversions -= qty_to_arb # Negative conversion means sell to Pristine
+                 remaining_conv_capacity -= qty_to_arb
+                 # Place local buy order
+                 local_orders.append(Order(state.product, int(local_best_ask), qty_to_arb))
+                 logger.print(f"ARB: Local->Pristine. Profit={potential_profit:.2f}/unit. Place Buy Order @ {local_best_ask}, Request Conv SELL {qty_to_arb}")
+
+
+        # --- 3. Apply CSI-Based Local Logic ---
+        if sunlight_index < Trade.CSI and duration_below_csi >= Trade.LONG_PERIOD_THRESHOLD:
+            # Panic Buy Mode (Local Market) - Triggered only after sustained low sunlight
+            logger.print("Macaron Hybrid: Below CSI & Long Duration - Entering Panic Buy Mode (Local)")
+            qty_to_buy_panic = state.possible_buy_amt
+            if qty_to_buy_panic > 0:
+                best_ask_price = state.best_ask
+                if best_ask_price is not None:
+                    # Avoid panic buying if local price is excessively high vs pristine
+                    if best_ask_price > pristine_buy_cost + estimated_storage + Trade.ARB_PROFIT_MARGIN * 10:
+                         logger.print(f"Panic Mode: Skipped BUYING {qty_to_buy_panic} at {best_ask_price} (price too high vs pristine cost {pristine_buy_cost + estimated_storage:.2f})")
+                    else:
+                        local_orders.append(Order(state.product, int(best_ask_price), qty_to_buy_panic))
+                        logger.print(f"Panic Mode: Placing Local BUY order for {qty_to_buy_panic} at best ask {best_ask_price}")
+                else:
+                    logger.print("Panic Mode: Wanted to BUY locally, but no asks available.")
+            else:
+                 logger.print("Panic Mode: Wanted to BUY locally, but at position limit.")
+
+        else:
+            # Normal Mode (Supply/Demand - Volume Imbalance)
+            # This runs if sunlight >= CSI OR if sunlight < CSI but duration is not yet met
+            if sunlight_index < Trade.CSI:
+                 logger.print(f"Macaron Hybrid: Below CSI but duration ({duration_below_csi}) < threshold ({Trade.LONG_PERIOD_THRESHOLD}). Using Supply/Demand Mode.")
+            else:
+                 logger.print("Macaron Hybrid: Above CSI - Entering Supply/Demand Mode (Volume Imbalance)")
+
+            volume_orders = Trade.macaron_volume(state)
+            if volume_orders:
+                logger.print(f"Supply/Demand Mode: Adding {len(volume_orders)} orders from volume strategy.")
+                local_orders.extend(volume_orders)
+
+        # --- 4. Return Orders and Conversions ---
+        return local_orders, desired_conversions
 
     
     @staticmethod
     def macarons_parity(state: Status, current_conversions: int) -> tuple[list[Order], int]:
-        """
-        Local ↔ foreign parity arb for MAGNIFICENT_MACARONS,
-        widened by PARITY_MARGIN to cover slippage & fees.
-        """
         STORAGE_COST = 0.1
         obs = state._state.observations.conversionObservations["MAGNIFICENT_MACARONS"]
 
@@ -1243,9 +1357,9 @@ class Trade:
         """
         pos = state.position
         if pos > 0:
-            return min(pos, 10)
+            return -min(pos, 10)
         elif pos < 0:
-            return max(pos, -10)
+            return min(abs(pos), 10)
         return 0
 
     
@@ -1265,7 +1379,7 @@ class Trader:
     state_voucher_10500 = Status("VOLCANIC_ROCK_VOUCHER_10500")
     state_volcanic_rock = Status("VOLCANIC_ROCK")
     state_macarons = Status("MAGNIFICENT_MACARONS")
-
+    macaron_sunlight_below_csi_counter = 0
     last_vol_coeffs = None
     voucher_deltas = {}
     
@@ -1278,18 +1392,18 @@ class Trader:
         "trade_size": 200, # default 20
     }
 
-    def __init__(self):
-        self.offsets = list(range(-5, 2))   # try –5 up to +1
-        self.counts  = {o:1 for o in self.offsets}
-        self.rewards = {o:0.0 for o in self.offsets}
+    # def __init__(self):
+    #     self.offsets = list(range(-5, 2))   # try –5 up to +1
+    #     self.counts  = {o:1 for o in self.offsets}
+    #     self.rewards = {o:0.0 for o in self.offsets}
 
-    def choose_offset(self):
-        total = sum(self.counts.values())
-        import math
-        def ucb(o):
-            return (self.rewards[o]/self.counts[o]
-                    + math.sqrt(2*math.log(total)/self.counts[o]))
-        return max(self.offsets, key=ucb)
+    # def choose_offset(self):
+    #     total = sum(self.counts.values())
+    #     import math
+    #     def ucb(o):
+    #         return (self.rewards[o]/self.counts[o]
+    #                 + math.sqrt(2*math.log(total)/self.counts[o]))
+    #     return max(self.offsets, key=ucb)
 
     def run(self, state: TradingState) -> tuple[dict[Symbol, list[Order]], int, str]:
         Status.cls_update(state)
@@ -1555,28 +1669,118 @@ class Trader:
                  result[symbol].extend(orders)
         # --- End Combine ---
 
-        foreign_ask = state.observations.conversionObservations["MAGNIFICENT_MACARONS"].askPrice
-        offset = self.choose_offset()
-        px     = int(foreign_ask + offset)
-        qty    = min(100, self.state_macarons.possible_sell_amt)
+        # foreign_ask = state.observations.conversionObservations["MAGNIFICENT_MACARONS"].askPrice
+        # offset = self.choose_offset()
+        # px     = int(foreign_ask + offset)
+        # qty    = min(100, self.state_macarons.possible_sell_amt)
 
-        # place local sell:
-        order = Order("MAGNIFICENT_MACARONS", px, -qty)
-        result["MAGNIFICENT_MACARONS"] = [order]
+        # # place local sell:
+        # order = Order("MAGNIFICENT_MACARONS", px, -qty)
+        # result["MAGNIFICENT_MACARONS"] = [order]
 
-        # … after the exchange, measure how many actually filled …
-        conv = state.observations.conversionObservations["MAGNIFICENT_MACARONS"]
-        cost_per_unit = conv.askPrice + conv.transportFees + conv.importTariff
-        filled = min(qty, self.state_macarons.best_bid_amount)  # approximate
-        profit = (px - cost_per_unit) * filled
+        # # … after the exchange, measure how many actually filled …
+        # conv = state.observations.conversionObservations["MAGNIFICENT_MACARONS"]
+        # cost_per_unit = conv.askPrice + conv.transportFees + conv.importTariff
+        # filled = min(qty, self.state_macarons.best_bid_amount)  # approximate
+        # profit = (px - cost_per_unit) * filled
 
-        # update bandit stats:
-        self.counts[offset]  += 1
-        self.rewards[offset] += profit
+        # # update bandit stats:
+        # self.counts[offset]  += 1
+        # self.rewards[offset] += profit
         # --- Final Steps ---
         conversions = 0 # Adjust if needed
+
+
+
+
+        # --- Magnificent Macarons Hybrid Strategy ---
+        product = "MAGNIFICENT_MACARONS"
+        if product in state.observations.conversionObservations:
+            obs_macaron = state.observations.conversionObservations[product]
+            current_sunlight = obs_macaron.sunlightIndex
+            logger.print(f"Processing Macarons: Sunlight={current_sunlight}")
+
+            # --- Update Sunlight Duration Counter ---
+            if current_sunlight < Trade.CSI:
+                self.macaron_sunlight_below_csi_counter += 1
+                logger.print(f"Sunlight below CSI. Counter incremented to: {self.macaron_sunlight_below_csi_counter}")
+            else:
+                if self.macaron_sunlight_below_csi_counter > 0:
+                    logger.print(f"Sunlight >= CSI. Resetting counter from: {self.macaron_sunlight_below_csi_counter}")
+                self.macaron_sunlight_below_csi_counter = 0
+            # --- End Update ---
+
+            # Apply the new hybrid strategy, passing the duration counter
+            macaron_local_orders, macaron_arb_conversions = Trade.macarons_hybrid_strategy(
+                self.state_macarons,
+                current_sunlight,
+                conversions, # Pass current conversions used so far
+                self.macaron_sunlight_below_csi_counter # Pass the duration counter
+            )
+
+            # Add local market orders generated by the hybrid strategy
+            if macaron_local_orders:
+                if product not in result: result[product] = []
+                result[product].extend(macaron_local_orders)
+                logger.print(f"Hybrid Strategy added {len(macaron_local_orders)} local orders for Macarons.")
+
+            # Add desired arbitrage conversions to the total conversions for this tick
+            if macaron_arb_conversions != 0:
+                logger.print(f"Hybrid Strategy requests {macaron_arb_conversions} conversions for Macarons.")
+                # Check if adding these conversions exceeds the limit
+                if abs(conversions + macaron_arb_conversions) <= Trade.CONVERSION_LIMIT:
+                     conversions += macaron_arb_conversions
+                else:
+                     # Prioritize arb conversions up to the limit
+                     can_add = Trade.CONVERSION_LIMIT - abs(conversions)
+                     if macaron_arb_conversions > 0:
+                         actual_conv = min(macaron_arb_conversions, can_add)
+                     else: # Negative conversions
+                         actual_conv = max(macaron_arb_conversions, -can_add)
+
+                     if actual_conv != 0:
+                         conversions += actual_conv
+                         logger.print(f"WARN: Capped Macaron arb conversions at {actual_conv} due to limit. Total now: {conversions}")
+                     else:
+                         logger.print(f"WARN: Cannot perform Macaron arb conversions ({macaron_arb_conversions}) due to limit. Total: {conversions}")
+
+
+            #Optional: Add position flattening using conversions (runs *after* arbitrage check)
+            flatten_conversions = Trade.convert_macarons(self.state_macarons)
+            if flatten_conversions != 0:
+                logger.print(f"Position Flattening requests {flatten_conversions} conversions for Macarons.")
+                remaining_conv_capacity_after_arb = Trade.CONVERSION_LIMIT - abs(conversions)
+                if remaining_conv_capacity_after_arb > 0:
+                    if flatten_conversions > 0: # Need to buy back
+                        actual_flatten_conv = min(flatten_conversions, remaining_conv_capacity_after_arb)
+                    else: # Need to sell off
+                        actual_flatten_conv = max(flatten_conversions, -remaining_conv_capacity_after_arb)
+
+                    if actual_flatten_conv != 0:
+                        conversions += actual_flatten_conv
+                        logger.print(f"Applied {actual_flatten_conv} flattening conversions. Total now: {conversions}")
+                    else:
+                        logger.print("Cannot apply flattening conversions due to limit.")
+                else:
+                    logger.print("No conversion capacity left for flattening.")
+
+
+        else:
+            logger.print(f"Warning: {product} observations not found. Cannot run hybrid strategy.")
+
+
+        # final_trader_data = ""
+        # try:
+        #     final_trader_data = jsonpickle.encode(traderData)
+        # except Exception as e:
+        #     logger.print(f"Error encoding traderData: {e}")
+
+        # --- Final Steps ---
         final_trader_data = ""
         try:
+            # Add any necessary data to traderData before encoding
+            traderData['macaron_csi'] = Trade.CSI # Example: Store CSI used
+            # ... (keep existing traderData persistence for vouchers etc.) ...
             final_trader_data = jsonpickle.encode(traderData)
         except Exception as e:
             logger.print(f"Error encoding traderData: {e}")
