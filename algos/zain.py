@@ -1425,30 +1425,39 @@ class Trader:
         # result["CROISSANTS"] = Trade.croissant_ema(self.state_croiss)
         # --- Volcanic Strategy (Round 3) ---
         # Define voucher symbols, states, and strikes
-        voucher_symbols = [
-            "VOLCANIC_ROCK_VOUCHER_9500", "VOLCANIC_ROCK_VOUCHER_9750",
-            "VOLCANIC_ROCK_VOUCHER_10000", "VOLCANIC_ROCK_VOUCHER_10250",
-            "VOLCANIC_ROCK_VOUCHER_10500"
-        ]
-        
-        try:
-            voucher_states = {
-                "VOLCANIC_ROCK_VOUCHER_9500": self.state_voucher_9500,
-                "VOLCANIC_ROCK_VOUCHER_9750": self.state_voucher_9750,
-                "VOLCANIC_ROCK_VOUCHER_10000": self.state_voucher_10000,
-                "VOLCANIC_ROCK_VOUCHER_10250": self.state_voucher_10250,
-                "VOLCANIC_ROCK_VOUCHER_10500": self.state_voucher_10500,
-            }
-            # Also ensure the underlying state exists
-            if not hasattr(self, 'state_volcanic_rock'):
-                 raise AttributeError("state_volcanic_rock not defined in Trader")
 
-        except AttributeError as e:
-             logger.print(f"CRITICAL ERROR: Missing state attribute in Trader class: {e}")
-             logger.flush(state, result, 0, "AttributeError") # Log error and exit run
-             return result, 0, "AttributeError"
+
+
+
+
+
+
+        # --- Volcanic Strategy (Round 3) ---
+        ### Start uncomment
+        # voucher_symbols = [
+        #     "VOLCANIC_ROCK_VOUCHER_9500", "VOLCANIC_ROCK_VOUCHER_9750",
+        #     "VOLCANIC_ROCK_VOUCHER_10000", "VOLCANIC_ROCK_VOUCHER_10250",
+        #     "VOLCANIC_ROCK_VOUCHER_10500"
+        # ]
         
-        # --- Decode TraderData ---
+        # try:
+        #     voucher_states = {
+        #         "VOLCANIC_ROCK_VOUCHER_9500": self.state_voucher_9500,
+        #         "VOLCANIC_ROCK_VOUCHER_9750": self.state_voucher_9750,
+        #         "VOLCANIC_ROCK_VOUCHER_10000": self.state_voucher_10000,
+        #         "VOLCANIC_ROCK_VOUCHER_10250": self.state_voucher_10250,
+        #         "VOLCANIC_ROCK_VOUCHER_10500": self.state_voucher_10500,
+        #     }
+        #     # Also ensure the underlying state exists
+        #     if not hasattr(self, 'state_volcanic_rock'):
+        #          raise AttributeError("state_volcanic_rock not defined in Trader")
+
+        # except AttributeError as e:
+        #      logger.print(f"CRITICAL ERROR: Missing state attribute in Trader class: {e}")
+        #      logger.flush(state, result, 0, "AttributeError") # Log error and exit run
+        #      return result, 0, "AttributeError"
+        
+        # # --- Decode TraderData ---
         traderData = {}
         if state.traderData:
             try:
@@ -1456,218 +1465,220 @@ class Trader:
             except Exception as e:
                 logger.print(f"Error decoding traderData: {e}")
                 traderData = {} # Start fresh if decode fails
-        # --- End Decode ---
+        # # --- End Decode ---
 
         
         
-        strikes = {
-            "VOLCANIC_ROCK_VOUCHER_9500": 9500, "VOLCANIC_ROCK_VOUCHER_9750": 9750,
-            "VOLCANIC_ROCK_VOUCHER_10000": 10000, "VOLCANIC_ROCK_VOUCHER_10250": 10250,
-            "VOLCANIC_ROCK_VOUCHER_10500": 10500
-        }
+        # strikes = {
+        #     "VOLCANIC_ROCK_VOUCHER_9500": 9500, "VOLCANIC_ROCK_VOUCHER_9750": 9750,
+        #     "VOLCANIC_ROCK_VOUCHER_10000": 10000, "VOLCANIC_ROCK_VOUCHER_10250": 10250,
+        #     "VOLCANIC_ROCK_VOUCHER_10500": 10500
+        # }
         
-        voucher_symbols = [
-            "VOLCANIC_ROCK_VOUCHER_9500", "VOLCANIC_ROCK_VOUCHER_9750",
-            "VOLCANIC_ROCK_VOUCHER_10000", "VOLCANIC_ROCK_VOUCHER_10250",
-            "VOLCANIC_ROCK_VOUCHER_10500"
-        ]
+        # voucher_symbols = [
+        #     "VOLCANIC_ROCK_VOUCHER_9500", "VOLCANIC_ROCK_VOUCHER_9750",
+        #     "VOLCANIC_ROCK_VOUCHER_10000", "VOLCANIC_ROCK_VOUCHER_10250",
+        #     "VOLCANIC_ROCK_VOUCHER_10500"
+        # ]
         
-        strikes = { voucher_symbols[i]: int(voucher_symbols[i].split('_')[-1]) for i in range(len(voucher_symbols))}
+        # strikes = { voucher_symbols[i]: int(voucher_symbols[i].split('_')[-1]) for i in range(len(voucher_symbols))}
 
-        # --- Initialize traderData structures if first run ---
-        if 'vol_iv_history' not in traderData:
-            traderData['vol_iv_history'] = {str(k): [] for k in strikes.values()}
-        # --- End Initialize ---
+        # # --- Initialize traderData structures if first run ---
+        # if 'vol_iv_history' not in traderData:
+        #     traderData['vol_iv_history'] = {str(k): [] for k in strikes.values()}
+        # # --- End Initialize ---
         
-        try:
-            voucher_states = {sym: getattr(self, f"state_voucher_{strikes[sym]}") for sym in voucher_symbols}
-            _ = self.state_volcanic_rock # Check underlying state exists
-        except AttributeError as e:
-             logger.print(f"CRITICAL ERROR: Missing state attribute in Trader class: {e}")
-             logger.flush(state, result, 0, jsonpickle.encode(traderData))
-             return result, 0, jsonpickle.encode(traderData) # Stop processing
+        # try:
+        #     voucher_states = {sym: getattr(self, f"state_voucher_{strikes[sym]}") for sym in voucher_symbols}
+        #     _ = self.state_volcanic_rock # Check underlying state exists
+        # except AttributeError as e:
+        #      logger.print(f"CRITICAL ERROR: Missing state attribute in Trader class: {e}")
+        #      logger.flush(state, result, 0, jsonpickle.encode(traderData))
+        #      return result, 0, jsonpickle.encode(traderData) # Stop processing
         
-        # 1. Get Inputs
-        try:
-            spot_volcanic = self.state_volcanic_rock.mid # Underlying price (St)
-            TTE = compute_time_to_expiry(round_number, current_timestamp)
-            r = 0.0 # Risk-free rate
-            if TTE <= 1e-9: raise ValueError(f"Time to expiry too small: {TTE}")
-        except Exception as e:
-            logger.print(f"Error getting Volcanic inputs or TTE: {e}. Skipping Volcanic.")
-            logger.flush(state, result, 0, jsonpickle.encode(traderData))
-            return result, 0, jsonpickle.encode(traderData)
+        # # 1. Get Inputs
+        # try:
+        #     spot_volcanic = self.state_volcanic_rock.mid # Underlying price (St)
+        #     TTE = compute_time_to_expiry(round_number, current_timestamp)
+        #     r = 0.0 # Risk-free rate
+        #     if TTE <= 1e-9: raise ValueError(f"Time to expiry too small: {TTE}")
+        # except Exception as e:
+        #     logger.print(f"Error getting Volcanic inputs or TTE: {e}. Skipping Volcanic.")
+        #     logger.flush(state, result, 0, jsonpickle.encode(traderData))
+        #     return result, 0, jsonpickle.encode(traderData)
 
-        net_voucher_delta_change = 0.0
-        temp_voucher_orders = {sym: [] for sym in voucher_symbols} # Store voucher orders before adding to result
-        current_ivs = {} # Store current IVs {strike: iv}
-        # ---
+        # net_voucher_delta_change = 0.0
+        # temp_voucher_orders = {sym: [] for sym in voucher_symbols} # Store voucher orders before adding to result
+        # current_ivs = {} # Store current IVs {strike: iv}
+        # # ---
 
-        # 2. Calculate IV, Z-Score, Delta and Generate Voucher Orders (per strike)
-        for symbol in voucher_symbols:
-            voucher_state = voucher_states[symbol]
-            K = strikes[symbol]
-            strike_key = str(K) # Use strike number as key for history/params
+        # # 2. Calculate IV, Z-Score, Delta and Generate Voucher Orders (per strike)
+        # for symbol in voucher_symbols:
+        #     voucher_state = voucher_states[symbol]
+        #     K = strikes[symbol]
+        #     strike_key = str(K) # Use strike number as key for history/params
 
-            try:
-                market_price = voucher_state.mid # Voucher price (Vt)
+        #     try:
+        #         market_price = voucher_state.mid # Voucher price (Vt)
 
-                if market_price <= 0 or spot_volcanic <= 0:
-                    logger.print(f"Skipping IV calc for {symbol}: Invalid prices (S={spot_volcanic:.2f}, V={market_price:.2f})")
-                    current_ivs[strike_key] = np.nan 
-                    continue
+        #         if market_price <= 0 or spot_volcanic <= 0:
+        #             logger.print(f"Skipping IV calc for {symbol}: Invalid prices (S={spot_volcanic:.2f}, V={market_price:.2f})")
+        #             current_ivs[strike_key] = np.nan 
+        #             continue
 
-                # Inside the loop, before calculating IV:
-                market_price = voucher_state.mid
-                intrinsic_value = max(spot_volcanic - K * math.exp(-r * TTE), 0.0)
-                tolerance = 0.01 # Tiny tolerance, adjust if needed
+        #         # Inside the loop, before calculating IV:
+        #         market_price = voucher_state.mid
+        #         intrinsic_value = max(spot_volcanic - K * math.exp(-r * TTE), 0.0)
+        #         tolerance = 0.01 # Tiny tolerance, adjust if needed
 
-                actual_v_t = np.nan # Default to NaN
+        #         actual_v_t = np.nan # Default to NaN
 
-                if market_price <= (intrinsic_value + tolerance):
-                    logger.print(f"{symbol}: Market price {market_price:.2f} near intrinsic {intrinsic_value:.2f}. Skipping IV calc (treating as near zero vol).")
-                    # Option 1: Assign NaN (will skip Z-score calc)
-                    actual_v_t = np.nan
-                    # Option 2: Assign a tiny volatility (might allow delta calc)
-                    # actual_v_t = 1e-5
-                elif spot_volcanic <= 0 or market_price <= 0:
-                    logger.print(f"Skipping IV calc for {symbol}: Invalid prices (S={spot_volcanic:.2f}, V={market_price:.2f})")
-                    actual_v_t = np.nan
-                else:
-                    # Only call IV function if price is safely above intrinsic
-                    actual_v_t = implied_volatility(market_price, spot_volcanic, K, round_number, current_timestamp, r)
+        #         if market_price <= (intrinsic_value + tolerance):
+        #             logger.print(f"{symbol}: Market price {market_price:.2f} near intrinsic {intrinsic_value:.2f}. Skipping IV calc (treating as near zero vol).")
+        #             # Option 1: Assign NaN (will skip Z-score calc)
+        #             actual_v_t = np.nan
+        #             # Option 2: Assign a tiny volatility (might allow delta calc)
+        #             # actual_v_t = 1e-5
+        #         elif spot_volcanic <= 0 or market_price <= 0:
+        #             logger.print(f"Skipping IV calc for {symbol}: Invalid prices (S={spot_volcanic:.2f}, V={market_price:.2f})")
+        #             actual_v_t = np.nan
+        #         else:
+        #             # Only call IV function if price is safely above intrinsic
+        #             actual_v_t = implied_volatility(market_price, spot_volcanic, K, round_number, current_timestamp, r)
 
-                logger.print(f"IV Calc {symbol}: S={spot_volcanic:.2f}, K={K}, T={TTE:.4f}, V={market_price:.2f} -> IV={actual_v_t}")
-                current_ivs[str(K)] = actual_v_t # Use string key here too if needed elsewhere
+        #         logger.print(f"IV Calc {symbol}: S={spot_volcanic:.2f}, K={K}, T={TTE:.4f}, V={market_price:.2f} -> IV={actual_v_t}")
+        #         current_ivs[str(K)] = actual_v_t # Use string key here too if needed elsewhere
 
-                # Now proceed with the if not np.isnan(actual_v_t): block...
+        #         # Now proceed with the if not np.isnan(actual_v_t): block...
 
-                # Update IV History (handle NaN IV)
-                if not np.isnan(actual_v_t):
-                    iv_history = traderData['vol_iv_history'].get(strike_key, [])
-                    iv_history.append(actual_v_t)
-                    # Limit history length
-                    if len(iv_history) > self.VOL_PARAMS["std_window"]:
-                        iv_history =  iv_history[-self.VOL_PARAMS["std_window"]:] # Keep only the window size
-                    traderData['vol_iv_history'][strike_key] = iv_history
+        #         # Update IV History (handle NaN IV)
+        #         if not np.isnan(actual_v_t):
+        #             iv_history = traderData['vol_iv_history'].get(strike_key, [])
+        #             iv_history.append(actual_v_t)
+        #             # Limit history length
+        #             if len(iv_history) > self.VOL_PARAMS["std_window"]:
+        #                 iv_history =  iv_history[-self.VOL_PARAMS["std_window"]:] # Keep only the window size
+        #             traderData['vol_iv_history'][strike_key] = iv_history
 
-                    # Calculate Z-Score if enough history
-                    if len(iv_history) >= self.VOL_PARAMS["std_window"]:
-                        hist = traderData['vol_iv_history'][strike_key]
-                        std_dev = np.std(iv_history)
-                        mean_vol = self.VOL_PARAMS["mean_volatility"].get(strike_key, 0.7) # Use strike-specific or default mean
+        #             # Calculate Z-Score if enough history
+        #             if len(iv_history) >= self.VOL_PARAMS["std_window"]:
+        #                 hist = traderData['vol_iv_history'][strike_key]
+        #                 std_dev = np.std(iv_history)
+        #                 mean_vol = self.VOL_PARAMS["mean_volatility"].get(strike_key, 0.7) # Use strike-specific or default mean
 
-                        if std_dev > 1e-6: # Avoid division by zero
-                            vol_z_score = (actual_v_t - mean_vol) / std_dev
-                            logger.print(f"{symbol}: IV={actual_v_t:.4f}, Mean={mean_vol:.4f}, Std={std_dev:.4f}, Z={vol_z_score:.2f}")
+        #                 if std_dev > 1e-6: # Avoid division by zero
+        #                     vol_z_score = (actual_v_t - mean_vol) / std_dev
+        #                     logger.print(f"{symbol}: IV={actual_v_t:.4f}, Mean={mean_vol:.4f}, Std={std_dev:.4f}, Z={vol_z_score:.2f}")
 
-                            # Generate Orders based on Z-Score
-                            trade_qty = self.VOL_PARAMS["trade_size"]
-                            z_thresh = self.VOL_PARAMS["zscore_threshold"]
+        #                     # Generate Orders based on Z-Score
+        #                     trade_qty = self.VOL_PARAMS["trade_size"]
+        #                     z_thresh = self.VOL_PARAMS["zscore_threshold"]
 
-                            if vol_z_score > z_thresh: # IV too high -> Sell Voucher
-                                qty_to_sell = min(trade_qty, voucher_state.possible_sell_amt)
-                                if qty_to_sell > 0:
-                                    order_price = voucher_state.best_bid # Hit best bid
-                                    if order_price is not None: # Ensure there is a bid
-                                        order = Order(symbol, order_price, -qty_to_sell)
-                                        temp_voucher_orders[symbol].append(order)
-                                        logger.print(f"-> VOL SELL {symbol} @ {order_price} x {qty_to_sell} (Z={vol_z_score:.2f})")
-                                    else: logger.print(f"Cannot SELL {symbol}: No bids")
+        #                     if vol_z_score > z_thresh: # IV too high -> Sell Voucher
+        #                         qty_to_sell = min(trade_qty, voucher_state.possible_sell_amt)
+        #                         if qty_to_sell > 0:
+        #                             order_price = voucher_state.best_bid # Hit best bid
+        #                             if order_price is not None: # Ensure there is a bid
+        #                                 order = Order(symbol, order_price, -qty_to_sell)
+        #                                 temp_voucher_orders[symbol].append(order)
+        #                                 logger.print(f"-> VOL SELL {symbol} @ {order_price} x {qty_to_sell} (Z={vol_z_score:.2f})")
+        #                             else: logger.print(f"Cannot SELL {symbol}: No bids")
 
-                            elif vol_z_score < -z_thresh: # IV too low -> Buy Voucher
-                                qty_to_buy = min(trade_qty, voucher_state.possible_buy_amt)
-                                if qty_to_buy > 0:
-                                    order_price = voucher_state.best_ask # Hit best ask
-                                    if order_price is not None: # Ensure there is an ask
-                                        order = Order(symbol, order_price, qty_to_buy)
-                                        temp_voucher_orders[symbol].append(order)
-                                        logger.print(f"-> VOL BUY {symbol} @ {order_price} x {qty_to_buy} (Z={vol_z_score:.2f})")
-                                    else: logger.print(f"Cannot BUY {symbol}: No asks")
+        #                     elif vol_z_score < -z_thresh: # IV too low -> Buy Voucher
+        #                         qty_to_buy = min(trade_qty, voucher_state.possible_buy_amt)
+        #                         if qty_to_buy > 0:
+        #                             order_price = voucher_state.best_ask # Hit best ask
+        #                             if order_price is not None: # Ensure there is an ask
+        #                                 order = Order(symbol, order_price, qty_to_buy)
+        #                                 temp_voucher_orders[symbol].append(order)
+        #                                 logger.print(f"-> VOL BUY {symbol} @ {order_price} x {qty_to_buy} (Z={vol_z_score:.2f})")
+        #                             else: logger.print(f"Cannot BUY {symbol}: No asks")
 
-                        else:
-                            logger.print(f"{symbol}: Std Dev near zero, skipping Z-score signal.")
-                else:
-                    logger.print(f"{symbol}: IV calculation failed or NaN, skipping Z-score.")
+        #                 else:
+        #                     logger.print(f"{symbol}: Std Dev near zero, skipping Z-score signal.")
+        #         else:
+        #             logger.print(f"{symbol}: IV calculation failed or NaN, skipping Z-score.")
 
-                # --- Calculate Delta for Hedging (using current IV) ---
-                if not np.isnan(actual_v_t) and actual_v_t > 1e-6:
-                    delta = calculate_delta(spot_volcanic, K, TTE, r, actual_v_t)
-                else:
-                    delta = 1.0 if spot_volcanic > K else 0.0
+        #         # --- Calculate Delta for Hedging (using current IV) ---
+        #         if not np.isnan(actual_v_t) and actual_v_t > 1e-6:
+        #             delta = calculate_delta(spot_volcanic, K, TTE, r, actual_v_t)
+        #         else:
+        #             delta = 1.0 if spot_volcanic > K else 0.0
 
-                # Persist the computed delta by strike
-                Trader.voucher_deltas[str(int(K))] = delta
-                logger.print(f"[Delta Info] For strike {K}: Delta = {delta:.2f}")
+        #         # Persist the computed delta by strike
+        #         Trader.voucher_deltas[str(int(K))] = delta
+        #         logger.print(f"[Delta Info] For strike {K}: Delta = {delta:.2f}")
 
-                # --- End Delta Calc ---
+        #         # --- End Delta Calc ---
 
-                # --- Accumulate Delta Change from New Orders ---
-                for order in temp_voucher_orders[symbol]:
-                     net_voucher_delta_change += self.voucher_deltas[symbol] * order.quantity
-                # --- End Accumulate Delta ---
+        #         # --- Accumulate Delta Change from New Orders ---
+        #         for order in temp_voucher_orders[symbol]:
+        #              net_voucher_delta_change += self.voucher_deltas[symbol] * order.quantity
+        #         # --- End Accumulate Delta ---
 
-            except Exception as e:
-                logger.print(f"Error processing {symbol} (strike {K}): {type(e).__name__} - {e!r}")
-                self.voucher_deltas.pop(symbol, None)# Clear delta if error
-
-
-        # 3. Calculate Net Portfolio Delta and Hedge Order
-        current_portfolio_delta = 0.0
-        # Sum delta of existing positions
-        for symbol in voucher_symbols:
-            # Ensure position exists before accessing
-            position = voucher_states[symbol].position if symbol in state.position else 0
-            delta = self.voucher_deltas.get(symbol, 0.0) # Use stored delta
-            current_portfolio_delta += position * delta
-
-        # Total delta after planned trades
-        total_target_delta = current_portfolio_delta + net_voucher_delta_change
-
-        # Calculate desired hedge position & order quantity
-        target_hedge_position = -round(total_target_delta)
-        current_hedge_position = self.state_volcanic_rock.position
-        hedge_order_qty = target_hedge_position - current_hedge_position
-
-        # Apply VOLCANIC_ROCK position limits
-        hedge_limit = self.state_volcanic_rock.position_limit
-        if hedge_order_qty > 0: # Buying hedge
-            hedge_order_qty = min(hedge_order_qty, hedge_limit - current_hedge_position)
-        elif hedge_order_qty < 0: # Selling hedge
-            hedge_order_qty = max(hedge_order_qty, -hedge_limit - current_hedge_position)
-
-        logger.print(f"Delta Hedge: CurrentVoucherDelta={current_portfolio_delta:.2f}, NewTradeDelta={net_voucher_delta_change:.2f}, TargetNetDelta={total_target_delta:.2f}")
-        logger.print(f"Hedge Calc: TargetHedgePos={target_hedge_position}, CurrentHedgePos={current_hedge_position}, OrderQty={hedge_order_qty}")
-
-        # Create hedge order for VOLCANIC_ROCK if needed
-        if abs(hedge_order_qty) > 0:
-            best_bid_vr = self.state_volcanic_rock.best_bid
-            best_ask_vr = self.state_volcanic_rock.best_ask
-            hedge_price = None
-
-            if hedge_order_qty > 0 and best_ask_vr is not None: # Buying hedge
-                 hedge_price = best_ask_vr # Hit best ask
-            elif hedge_order_qty < 0 and best_bid_vr is not None: # Selling hedge
-                 hedge_price = best_bid_vr # Hit best bid
-
-            if hedge_price is not None : # Place order only if price is valid
-                hedge_order = Order("VOLCANIC_ROCK", hedge_price, hedge_order_qty)
-                logger.print(f"-> HEDGE ORDER: {hedge_order.symbol} @ {hedge_order.price} x {hedge_order.quantity}")
-                if "VOLCANIC_ROCK" not in result: result["VOLCANIC_ROCK"] = []
-                result["VOLCANIC_ROCK"].append(hedge_order)
-            else:
-                logger.print(f"Cannot place hedge order: Invalid market BBO for VOLCANIC_ROCK")
-        else:
-             logger.print("No hedge order needed.")
+        #     except Exception as e:
+        #         logger.print(f"Error processing {symbol} (strike {K}): {type(e).__name__} - {e!r}")
+        #         self.voucher_deltas.pop(symbol, None)# Clear delta if error
 
 
-        # --- Combine Orders ---
-        # Add generated voucher orders to the main result dictionary
-        for symbol, orders in temp_voucher_orders.items():
-            if orders:
-                 if symbol not in result: result[symbol] = []
-                 result[symbol].extend(orders)
-        # --- End Combine ---
+        # # 3. Calculate Net Portfolio Delta and Hedge Order
+        # current_portfolio_delta = 0.0
+        # # Sum delta of existing positions
+        # for symbol in voucher_symbols:
+        #     # Ensure position exists before accessing
+        #     position = voucher_states[symbol].position if symbol in state.position else 0
+        #     delta = self.voucher_deltas.get(symbol, 0.0) # Use stored delta
+        #     current_portfolio_delta += position * delta
+
+        # # Total delta after planned trades
+        # total_target_delta = current_portfolio_delta + net_voucher_delta_change
+
+        # # Calculate desired hedge position & order quantity
+        # target_hedge_position = -round(total_target_delta)
+        # current_hedge_position = self.state_volcanic_rock.position
+        # hedge_order_qty = target_hedge_position - current_hedge_position
+
+        # # Apply VOLCANIC_ROCK position limits
+        # hedge_limit = self.state_volcanic_rock.position_limit
+        # if hedge_order_qty > 0: # Buying hedge
+        #     hedge_order_qty = min(hedge_order_qty, hedge_limit - current_hedge_position)
+        # elif hedge_order_qty < 0: # Selling hedge
+        #     hedge_order_qty = max(hedge_order_qty, -hedge_limit - current_hedge_position)
+
+        # logger.print(f"Delta Hedge: CurrentVoucherDelta={current_portfolio_delta:.2f}, NewTradeDelta={net_voucher_delta_change:.2f}, TargetNetDelta={total_target_delta:.2f}")
+        # logger.print(f"Hedge Calc: TargetHedgePos={target_hedge_position}, CurrentHedgePos={current_hedge_position}, OrderQty={hedge_order_qty}")
+
+        # # Create hedge order for VOLCANIC_ROCK if needed
+        # if abs(hedge_order_qty) > 0:
+        #     best_bid_vr = self.state_volcanic_rock.best_bid
+        #     best_ask_vr = self.state_volcanic_rock.best_ask
+        #     hedge_price = None
+
+        #     if hedge_order_qty > 0 and best_ask_vr is not None: # Buying hedge
+        #          hedge_price = best_ask_vr # Hit best ask
+        #     elif hedge_order_qty < 0 and best_bid_vr is not None: # Selling hedge
+        #          hedge_price = best_bid_vr # Hit best bid
+
+        #     if hedge_price is not None : # Place order only if price is valid
+        #         hedge_order = Order("VOLCANIC_ROCK", hedge_price, hedge_order_qty)
+        #         logger.print(f"-> HEDGE ORDER: {hedge_order.symbol} @ {hedge_order.price} x {hedge_order.quantity}")
+        #         if "VOLCANIC_ROCK" not in result: result["VOLCANIC_ROCK"] = []
+        #         result["VOLCANIC_ROCK"].append(hedge_order)
+        #     else:
+        #         logger.print(f"Cannot place hedge order: Invalid market BBO for VOLCANIC_ROCK")
+        # else:
+        #      logger.print("No hedge order needed.")
+
+
+        # # --- Combine Orders ---
+        # # Add generated voucher orders to the main result dictionary
+        # for symbol, orders in temp_voucher_orders.items():
+        #     if orders:
+        #          if symbol not in result: result[symbol] = []
+        #          result[symbol].extend(orders)
+        # # --- End Combine ---
+
+        ########### End uncomment ###########
 
         # foreign_ask = state.observations.conversionObservations["MAGNIFICENT_MACARONS"].askPrice
         # offset = self.choose_offset()
