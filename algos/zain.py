@@ -990,7 +990,8 @@ class Strategy:
                                      r, vol_multiplier, base_buffer, hedge_scale)
 
 CROISSANTS = "CROISSANTS"
-EMA_PERIOD = 13     # Window period for the EMA calculation.
+EMA_PERIOD = 13
+PARITY_MARGIN = 0.5      # Window period for the EMA calculation.
 class Trade:
     mid_price_history = {CROISSANTS: []}
     macarons_history = {
@@ -1097,7 +1098,7 @@ class Trade:
     def croissant_ema(state: TradingState) -> list[Order]:
         # Access the class attribute instead of a global variable.
         status = Status(CROISSANTS)
-        Status.cls_update(state)
+        #Status.cls_update(state)
         current_price = status.mid
 
         history = Trade.mid_price_history[CROISSANTS]
@@ -1122,13 +1123,14 @@ class Trade:
         if z_score < -2.8:
             qty = status.possible_buy_amt
             orders.append(Order(CROISSANTS, int(current_price), qty))
-            #logger.print("EMA Signal: BUY CROISSANTS", "Price =", current_price, "Quantity =", qty)
+            logger.print("EMA Signal: BUY CROISSANTS", "Price =", current_price, "Quantity =", qty)
         elif z_score > 2.8:
             qty = status.possible_sell_amt
             orders.append(Order(CROISSANTS, int(current_price), -qty))
-            #logger.print("EMA Signal: SELL CROISSANTS", "Price =", current_price, "Quantity =", qty)
-        
-            #logger.print("EMA Signal: No action (z-score within threshold).")
+            logger.print("EMA Signal: SELL CROISSANTS", "Price =", current_price, "Quantity =", qty)
+        else:
+            logger.print("EMA Signal: No action (z-score within threshold).")
+            
         return orders
     
     @staticmethod
@@ -1179,134 +1181,59 @@ class Trade:
         """
         Local ↔ foreign parity arb for MAGNIFICENT_MACARONS,
         widened by PARITY_MARGIN to cover slippage & fees.
-        Includes take-profit and stop-loss logic.
         """
-        # --- Parameters ---
-        # How much the price must deviate from parity to enter a trade
-        PARITY_MARGIN = 0.3 # Original value, tune as needed
-        # How close the price must get back to parity to take profit
-        EXIT_MARGIN = 1   # New parameter for take-profit, tune as needed
-        # How far the mid-price must move against the position *beyond* parity to trigger stop-loss
-        STOP_THRESH = max(2, int((state.best_ask - state.best_bid) * 2)) # Original calculation, potentially tune
         STORAGE_COST = 0.1
-        CONVERSION_LIMIT = 10 # Max conversions per tick
-
-        # --- Calculations ---
         obs = state._state.observations.conversionObservations["MAGNIFICENT_MACARONS"]
-        
-        # Price effectively received if selling via conversion (sell foreign)
-        implied_bid = ( 
-            obs.bidPrice 
-            - obs.exportTariff 
-            - obs.transportFees 
+
+        implied_bid = (
+            obs.bidPrice
+            - obs.exportTariff
+            - obs.transportFees
             - STORAGE_COST
         )
-        # Price effectively paid if buying via conversion (buy foreign)
         implied_ask = (
-            obs.askPrice 
-            + obs.importTariff 
-            + obs.transportFees 
+            obs.askPrice
+            + obs.importTariff
+            + obs.transportFees
             + STORAGE_COST
         )
 
         orders: list[Order] = []
-        used_conv = 0 # Tracks conversion capacity used *by entry trades* in this tick
-        remaining_conv = max(0, CONVERSION_LIMIT - current_conversions)
-        pos = state.position # Current position
+        used_conv = 0
+        remaining_conv = max(0, 10 - current_conversions)
 
-        # --- Take Profit Logic (Check before Stop-Loss) ---
-        # If long, try to sell if local bid is close to implied foreign bid
-        if pos > 0:
-            # Check if the best bid price is now favorable for closing
-            if state.best_bid >= implied_bid - EXIT_MARGIN:
-                close_qty = pos # Close the entire position
-                # Ensure we don't try to sell more than available bid volume (optional check, might complicate things)
-                # close_qty = min(pos, state.bidamt(state.best_bid)) # Requires bidamt to handle best_bid potentially not being in dict keys if empty
-                
-                logger.print(f"MACARON TAKE PROFIT (LONG): Closing {close_qty} at {state.best_bid} (Implied Bid: {implied_bid:.2f})")
-                orders.append(Order(state.product, state.best_bid, -close_qty))
-                # Update position for subsequent logic this tick
-                pos -= close_qty 
-                # Note: Take-profit doesn't consume conversion capacity this tick
+        # buy local if below implied foreign‐bid minus margin
+        for ask_price, ask_amt in state.asks:
+            if (
+                ask_price < implied_bid - PARITY_MARGIN
+                and remaining_conv > 0
+            ):
+                qty = min(-ask_amt, state.possible_buy_amt, remaining_conv)
+                orders.append(Order("MAGNIFICENT_MACARONS", int(ask_price), qty))
+                used_conv += qty
+                remaining_conv -= qty
 
-        # If short, try to buy back if local ask is close to implied foreign ask
-        elif pos < 0:
-             # Check if the best ask price is now favorable for closing
-            if state.best_ask <= implied_ask + EXIT_MARGIN:
-                close_qty = -pos # Close the entire position (buy back)
-                # Ensure we don't try to buy more than available ask volume (optional check)
-                # close_qty = min(-pos, state.askamt(state.best_ask)) # Requires askamt to handle best_ask potentially not being in dict keys if empty
+        # sell local if above implied foreign‐ask plus margin
+        for bid_price, bid_amt in state.bids:
+            if (
+                bid_price > implied_ask + PARITY_MARGIN
+                and remaining_conv > 0
+            ):
+                qty = min(bid_amt, state.possible_sell_amt, remaining_conv)
+                orders.append(Order("MAGNIFICENT_MACARONS", int(bid_price), -qty))
+                used_conv += qty
+                remaining_conv -= qty
 
-                logger.print(f"MACARON TAKE PROFIT (SHORT): Closing {close_qty} at {state.best_ask} (Implied Ask: {implied_ask:.2f})")
-                orders.append(Order(state.product, state.best_ask, close_qty))
-                 # Update position for subsequent logic this tick
-                pos += close_qty
-                # Note: Take-profit doesn't consume conversion capacity this tick
+        # unwind adverse positions if they run away
+        pos = state.position
+        mid = state.mid
+        STOP_THRESH = max(1, int((implied_ask - implied_bid) * 2))
 
-        # --- Entry Logic (Only if not fully closed by take-profit) ---
-        # Buy local if below implied foreign-bid minus margin (opportunity to sell foreign later)
-        # Check remaining position after potential take-profit
-        current_possible_buy = state.position_limit - pos # Recalculate based on potentially modified pos
-        
-        if current_possible_buy > 0:
-            for ask_price, ask_amt in sorted(state.asks): # Iterate best asks first
-                if (
-                    ask_price < implied_bid - PARITY_MARGIN
-                    and remaining_conv > 0 # Check conversion capacity
-                ):
-                    qty_to_buy = min(-ask_amt, current_possible_buy, remaining_conv)
-                    if qty_to_buy <= 0: continue # Skip if no volume or capacity
+        if pos > 0 and mid > implied_ask + STOP_THRESH:
+            orders.append(Order("MAGNIFICENT_MACARONS", state.best_bid, -pos))
+        elif pos < 0 and mid < implied_bid - STOP_THRESH:
+            orders.append(Order("MAGNIFICENT_MACARONS", state.best_ask, -pos))
 
-                    logger.print(f"MACARON ENTRY (BUY): Buying {qty_to_buy} at {ask_price} (Implied Bid: {implied_bid:.2f})")
-                    orders.append(Order(state.product, int(ask_price), qty_to_buy))
-                    
-                    used_conv += qty_to_buy
-                    remaining_conv -= qty_to_buy
-                    pos += qty_to_buy # Update position
-                    current_possible_buy -= qty_to_buy # Update possible buy amount
-                    if current_possible_buy <= 0 or remaining_conv <= 0: break # Stop if limit reached
-
-        # Sell local if above implied foreign-ask plus margin (opportunity to buy foreign later)
-        # Check remaining position after potential take-profit/buy entries
-        current_possible_sell = state.position_limit + pos # Recalculate based on potentially modified pos
-        
-        if current_possible_sell > 0:
-             for bid_price, bid_amt in sorted(state.bids, reverse=True): # Iterate best bids first
-                if (
-                    bid_price > implied_ask + PARITY_MARGIN
-                    and remaining_conv > 0 # Check conversion capacity
-                ):
-                    qty_to_sell = min(bid_amt, current_possible_sell, remaining_conv)
-                    if qty_to_sell <= 0: continue # Skip if no volume or capacity
-
-                    logger.print(f"MACARON ENTRY (SELL): Selling {qty_to_sell} at {bid_price} (Implied Ask: {implied_ask:.2f})")
-                    orders.append(Order(state.product, int(bid_price), -qty_to_sell))
-
-                    used_conv += qty_to_sell
-                    remaining_conv -= qty_to_sell
-                    pos -= qty_to_sell # Update position
-                    current_possible_sell -= qty_to_sell # Update possible sell amount
-                    if current_possible_sell <= 0 or remaining_conv <= 0: break # Stop if limit reached
-
-        # --- Stop Loss Logic (Check after potential entries/exits) ---
-        # Check the final position for the tick *after* entries/exits
-        final_pos = state.position # Get the original position before modifications within this function
-        # Or use the updated 'pos' if you want stop loss to consider trades made *this tick*
-        # final_pos = pos # Use this if stop loss should react to intra-tick trades
-
-        mid = state.mid # Use mid-price for stop loss condition as before
-
-        # Stop out longs if mid drops too far below implied ask
-        if final_pos > 0 and mid < implied_ask - STOP_THRESH: # Note: Check against *ask* parity for long stop
-            logger.print(f"MACARON STOP LOSS (LONG): Closing {final_pos} at {state.best_bid} (Mid: {mid:.2f} vs Implied Ask: {implied_ask:.2f})")
-            orders.append(Order(state.product, state.best_bid, -final_pos))
-        # Stop out shorts if mid rises too far above implied bid
-        elif final_pos < 0 and mid > implied_bid + STOP_THRESH: # Note: Check against *bid* parity for short stop
-             logger.print(f"MACARON STOP LOSS (SHORT): Closing {-final_pos} at {state.best_ask} (Mid: {mid:.2f} vs Implied Bid: {implied_bid:.2f})")
-             orders.append(Order(state.product, state.best_ask, -final_pos))
-
-
-        # Return the generated orders and the conversion capacity used by ENTRY trades
         return orders, used_conv
         
     @staticmethod
@@ -1351,18 +1278,18 @@ class Trader:
         "trade_size": 200, # default 20
     }
 
-    # def __init__(self):
-    #     self.offsets = list(range(-5, 2))   # try –5 up to +1
-    #     self.counts  = {o:1 for o in self.offsets}
-    #     self.rewards = {o:0.0 for o in self.offsets}
+    def __init__(self):
+        self.offsets = list(range(-5, 2))   # try –5 up to +1
+        self.counts  = {o:1 for o in self.offsets}
+        self.rewards = {o:0.0 for o in self.offsets}
 
-    # def choose_offset(self):
-    #     total = sum(self.counts.values())
-    #     import math
-    #     def ucb(o):
-    #         return (self.rewards[o]/self.counts[o]
-    #                 + math.sqrt(2*math.log(total)/self.counts[o]))
-    #     return max(self.offsets, key=ucb)
+    def choose_offset(self):
+        total = sum(self.counts.values())
+        import math
+        def ucb(o):
+            return (self.rewards[o]/self.counts[o]
+                    + math.sqrt(2*math.log(total)/self.counts[o]))
+        return max(self.offsets, key=ucb)
 
     def run(self, state: TradingState) -> tuple[dict[Symbol, list[Order]], int, str]:
         Status.cls_update(state)
@@ -1372,279 +1299,282 @@ class Trader:
         result = {}
 
         # Round 1 orders:
-        result["RAINFOREST_RESIN"] = Trade.resin(self.state_resin)
-        result["KELP"] = Trade.kelp(self.state_kelp)
-        result["SQUID_INK"] = Trade.ema_mean_reversion(self.state_squink)
+        # result["RAINFOREST_RESIN"] = Trade.resin(self.state_resin)
+        # result["KELP"] = Trade.kelp(self.state_kelp)
+        # result["SQUID_INK"] = Trade.ema_mean_reversion(self.state_squink)
 
-        # Round 2 orders:
-        result["PICNIC_BASKET1"] = Trade.basket_1(self.state_picnic1, self.state_jam, self.state_djembes, self.state_croiss)
-        result["JAMS"] = Trade.jams(self.state_jam)
-        result["PICNIC_BASKET2"] = Trade.basket_2(self.state_picnic2, self.state_jam, self.state_djembes, self.state_croiss)
-        #result["DJEMBES"] = Trade.djmb_crs_pair(self.state_djembes, self.state_croiss)
-        result["CROISSANTS"] = Trade.croissant_ema(self.state_croiss)
-
-        # # --- Volcanic Strategy (Round 3) ---
-        # # Define voucher symbols, states, and strikes
-        # voucher_symbols = [
-        #     "VOLCANIC_ROCK_VOUCHER_9500", "VOLCANIC_ROCK_VOUCHER_9750",
-        #     "VOLCANIC_ROCK_VOUCHER_10000", "VOLCANIC_ROCK_VOUCHER_10250",
-        #     "VOLCANIC_ROCK_VOUCHER_10500"
-        # ]
+        # # Round 2 orders:
+        # result["PICNIC_BASKET1"] = Trade.basket_1(self.state_picnic1, self.state_jam, self.state_djembes, self.state_croiss)
+        # result["JAMS"] = Trade.jams(self.state_jam)
+        # result["PICNIC_BASKET2"] = Trade.basket_2(self.state_picnic2, self.state_jam, self.state_djembes, self.state_croiss)
+        # result["DJEMBES"] = Trade.djmb_crs_pair(self.state_djembes, self.state_croiss)
+        # result["CROISSANTS"] = Trade.croissant_ema(self.state_croiss)
+        # --- Volcanic Strategy (Round 3) ---
+        # Define voucher symbols, states, and strikes
+        voucher_symbols = [
+            "VOLCANIC_ROCK_VOUCHER_9500", "VOLCANIC_ROCK_VOUCHER_9750",
+            "VOLCANIC_ROCK_VOUCHER_10000", "VOLCANIC_ROCK_VOUCHER_10250",
+            "VOLCANIC_ROCK_VOUCHER_10500"
+        ]
         
-        # try:
-        #     voucher_states = {
-        #         "VOLCANIC_ROCK_VOUCHER_9500": self.state_voucher_9500,
-        #         "VOLCANIC_ROCK_VOUCHER_9750": self.state_voucher_9750,
-        #         "VOLCANIC_ROCK_VOUCHER_10000": self.state_voucher_10000,
-        #         "VOLCANIC_ROCK_VOUCHER_10250": self.state_voucher_10250,
-        #         "VOLCANIC_ROCK_VOUCHER_10500": self.state_voucher_10500,
-        #     }
-        #     # Also ensure the underlying state exists
-        #     if not hasattr(self, 'state_volcanic_rock'):
-        #          raise AttributeError("state_volcanic_rock not defined in Trader")
+        try:
+            voucher_states = {
+                "VOLCANIC_ROCK_VOUCHER_9500": self.state_voucher_9500,
+                "VOLCANIC_ROCK_VOUCHER_9750": self.state_voucher_9750,
+                "VOLCANIC_ROCK_VOUCHER_10000": self.state_voucher_10000,
+                "VOLCANIC_ROCK_VOUCHER_10250": self.state_voucher_10250,
+                "VOLCANIC_ROCK_VOUCHER_10500": self.state_voucher_10500,
+            }
+            # Also ensure the underlying state exists
+            if not hasattr(self, 'state_volcanic_rock'):
+                 raise AttributeError("state_volcanic_rock not defined in Trader")
 
-        # except AttributeError as e:
-        #      logger.print(f"CRITICAL ERROR: Missing state attribute in Trader class: {e}")
-        #      logger.flush(state, result, 0, "AttributeError") # Log error and exit run
-        #      return result, 0, "AttributeError"
+        except AttributeError as e:
+             logger.print(f"CRITICAL ERROR: Missing state attribute in Trader class: {e}")
+             logger.flush(state, result, 0, "AttributeError") # Log error and exit run
+             return result, 0, "AttributeError"
         
-        # # --- Decode TraderData ---
-        # traderData = {}
-        # if state.traderData:
-        #     try:
-        #         traderData = jsonpickle.decode(state.traderData)
-        #     except Exception as e:
-        #         logger.print(f"Error decoding traderData: {e}")
-        #         traderData = {} # Start fresh if decode fails
-        # # --- End Decode ---
+        # --- Decode TraderData ---
+        traderData = {}
+        if state.traderData:
+            try:
+                traderData = jsonpickle.decode(state.traderData)
+            except Exception as e:
+                logger.print(f"Error decoding traderData: {e}")
+                traderData = {} # Start fresh if decode fails
+        # --- End Decode ---
 
         
         
-        # strikes = {
-        #     "VOLCANIC_ROCK_VOUCHER_9500": 9500, "VOLCANIC_ROCK_VOUCHER_9750": 9750,
-        #     "VOLCANIC_ROCK_VOUCHER_10000": 10000, "VOLCANIC_ROCK_VOUCHER_10250": 10250,
-        #     "VOLCANIC_ROCK_VOUCHER_10500": 10500
-        # }
+        strikes = {
+            "VOLCANIC_ROCK_VOUCHER_9500": 9500, "VOLCANIC_ROCK_VOUCHER_9750": 9750,
+            "VOLCANIC_ROCK_VOUCHER_10000": 10000, "VOLCANIC_ROCK_VOUCHER_10250": 10250,
+            "VOLCANIC_ROCK_VOUCHER_10500": 10500
+        }
         
-        # voucher_symbols = [
-        #     "VOLCANIC_ROCK_VOUCHER_9500", "VOLCANIC_ROCK_VOUCHER_9750",
-        #     "VOLCANIC_ROCK_VOUCHER_10000", "VOLCANIC_ROCK_VOUCHER_10250",
-        #     "VOLCANIC_ROCK_VOUCHER_10500"
-        # ]
+        voucher_symbols = [
+            "VOLCANIC_ROCK_VOUCHER_9500", "VOLCANIC_ROCK_VOUCHER_9750",
+            "VOLCANIC_ROCK_VOUCHER_10000", "VOLCANIC_ROCK_VOUCHER_10250",
+            "VOLCANIC_ROCK_VOUCHER_10500"
+        ]
         
-        # strikes = { voucher_symbols[i]: int(voucher_symbols[i].split('_')[-1]) for i in range(len(voucher_symbols))}
+        strikes = { voucher_symbols[i]: int(voucher_symbols[i].split('_')[-1]) for i in range(len(voucher_symbols))}
 
-        # # --- Initialize traderData structures if first run ---
-        # if 'vol_iv_history' not in traderData:
-        #     traderData['vol_iv_history'] = {str(k): [] for k in strikes.values()}
-        # # --- End Initialize ---
+        # --- Initialize traderData structures if first run ---
+        if 'vol_iv_history' not in traderData:
+            traderData['vol_iv_history'] = {str(k): [] for k in strikes.values()}
+        # --- End Initialize ---
         
-        # try:
-        #     voucher_states = {sym: getattr(self, f"state_voucher_{strikes[sym]}") for sym in voucher_symbols}
-        #     _ = self.state_volcanic_rock # Check underlying state exists
-        # except AttributeError as e:
-        #      logger.print(f"CRITICAL ERROR: Missing state attribute in Trader class: {e}")
-        #      logger.flush(state, result, 0, jsonpickle.encode(traderData))
-        #      return result, 0, jsonpickle.encode(traderData) # Stop processing
+        try:
+            voucher_states = {sym: getattr(self, f"state_voucher_{strikes[sym]}") for sym in voucher_symbols}
+            _ = self.state_volcanic_rock # Check underlying state exists
+        except AttributeError as e:
+             logger.print(f"CRITICAL ERROR: Missing state attribute in Trader class: {e}")
+             logger.flush(state, result, 0, jsonpickle.encode(traderData))
+             return result, 0, jsonpickle.encode(traderData) # Stop processing
         
-        # # 1. Get Inputs
-        # try:
-        #     spot_volcanic = self.state_volcanic_rock.mid # Underlying price (St)
-        #     TTE = compute_time_to_expiry(round_number, current_timestamp)
-        #     r = 0.0 # Risk-free rate
-        #     if TTE <= 1e-9: raise ValueError(f"Time to expiry too small: {TTE}")
-        # except Exception as e:
-        #     logger.print(f"Error getting Volcanic inputs or TTE: {e}. Skipping Volcanic.")
-        #     logger.flush(state, result, 0, jsonpickle.encode(traderData))
-        #     return result, 0, jsonpickle.encode(traderData)
+        # 1. Get Inputs
+        try:
+            spot_volcanic = self.state_volcanic_rock.mid # Underlying price (St)
+            TTE = compute_time_to_expiry(round_number, current_timestamp)
+            r = 0.0 # Risk-free rate
+            if TTE <= 1e-9: raise ValueError(f"Time to expiry too small: {TTE}")
+        except Exception as e:
+            logger.print(f"Error getting Volcanic inputs or TTE: {e}. Skipping Volcanic.")
+            logger.flush(state, result, 0, jsonpickle.encode(traderData))
+            return result, 0, jsonpickle.encode(traderData)
 
-        # net_voucher_delta_change = 0.0
-        # temp_voucher_orders = {sym: [] for sym in voucher_symbols} # Store voucher orders before adding to result
-        # current_ivs = {} # Store current IVs {strike: iv}
-        # # ---
+        net_voucher_delta_change = 0.0
+        temp_voucher_orders = {sym: [] for sym in voucher_symbols} # Store voucher orders before adding to result
+        current_ivs = {} # Store current IVs {strike: iv}
+        # ---
 
-        # # 2. Calculate IV, Z-Score, Delta and Generate Voucher Orders (per strike)
-        # for symbol in voucher_symbols:
-        #     voucher_state = voucher_states[symbol]
-        #     K = strikes[symbol]
-        #     strike_key = str(K) # Use strike number as key for history/params
+        # 2. Calculate IV, Z-Score, Delta and Generate Voucher Orders (per strike)
+        for symbol in voucher_symbols:
+            voucher_state = voucher_states[symbol]
+            K = strikes[symbol]
+            strike_key = str(K) # Use strike number as key for history/params
 
-        #     try:
-        #         market_price = voucher_state.mid # Voucher price (Vt)
+            try:
+                market_price = voucher_state.mid # Voucher price (Vt)
 
-        #         if market_price <= 0 or spot_volcanic <= 0:
-        #             logger.print(f"Skipping IV calc for {symbol}: Invalid prices (S={spot_volcanic:.2f}, V={market_price:.2f})")
-        #             current_ivs[strike_key] = np.nan 
-        #             continue
+                if market_price <= 0 or spot_volcanic <= 0:
+                    logger.print(f"Skipping IV calc for {symbol}: Invalid prices (S={spot_volcanic:.2f}, V={market_price:.2f})")
+                    current_ivs[strike_key] = np.nan 
+                    continue
 
-        #         # Inside the loop, before calculating IV:
-        #         market_price = voucher_state.mid
-        #         intrinsic_value = max(spot_volcanic - K * math.exp(-r * TTE), 0.0)
-        #         tolerance = 0.01 # Tiny tolerance, adjust if needed
+                # Inside the loop, before calculating IV:
+                market_price = voucher_state.mid
+                intrinsic_value = max(spot_volcanic - K * math.exp(-r * TTE), 0.0)
+                tolerance = 0.01 # Tiny tolerance, adjust if needed
 
-        #         actual_v_t = np.nan # Default to NaN
+                actual_v_t = np.nan # Default to NaN
 
-        #         if market_price <= (intrinsic_value + tolerance):
-        #             logger.print(f"{symbol}: Market price {market_price:.2f} near intrinsic {intrinsic_value:.2f}. Skipping IV calc (treating as near zero vol).")
-        #             # Option 1: Assign NaN (will skip Z-score calc)
-        #             actual_v_t = np.nan
-        #             # Option 2: Assign a tiny volatility (might allow delta calc)
-        #             # actual_v_t = 1e-5
-        #         elif spot_volcanic <= 0 or market_price <= 0:
-        #             logger.print(f"Skipping IV calc for {symbol}: Invalid prices (S={spot_volcanic:.2f}, V={market_price:.2f})")
-        #             actual_v_t = np.nan
-        #         else:
-        #             # Only call IV function if price is safely above intrinsic
-        #             actual_v_t = implied_volatility(market_price, spot_volcanic, K, round_number, current_timestamp, r)
+                if market_price <= (intrinsic_value + tolerance):
+                    logger.print(f"{symbol}: Market price {market_price:.2f} near intrinsic {intrinsic_value:.2f}. Skipping IV calc (treating as near zero vol).")
+                    # Option 1: Assign NaN (will skip Z-score calc)
+                    actual_v_t = np.nan
+                    # Option 2: Assign a tiny volatility (might allow delta calc)
+                    # actual_v_t = 1e-5
+                elif spot_volcanic <= 0 or market_price <= 0:
+                    logger.print(f"Skipping IV calc for {symbol}: Invalid prices (S={spot_volcanic:.2f}, V={market_price:.2f})")
+                    actual_v_t = np.nan
+                else:
+                    # Only call IV function if price is safely above intrinsic
+                    actual_v_t = implied_volatility(market_price, spot_volcanic, K, round_number, current_timestamp, r)
 
-        #         logger.print(f"IV Calc {symbol}: S={spot_volcanic:.2f}, K={K}, T={TTE:.4f}, V={market_price:.2f} -> IV={actual_v_t}")
-        #         current_ivs[str(K)] = actual_v_t # Use string key here too if needed elsewhere
+                logger.print(f"IV Calc {symbol}: S={spot_volcanic:.2f}, K={K}, T={TTE:.4f}, V={market_price:.2f} -> IV={actual_v_t}")
+                current_ivs[str(K)] = actual_v_t # Use string key here too if needed elsewhere
 
-        #         # Now proceed with the if not np.isnan(actual_v_t): block...
+                # Now proceed with the if not np.isnan(actual_v_t): block...
 
-        #         # Update IV History (handle NaN IV)
-        #         if not np.isnan(actual_v_t):
-        #             iv_history = traderData['vol_iv_history'].get(strike_key, [])
-        #             iv_history.append(actual_v_t)
-        #             # Limit history length
-        #             if len(iv_history) > self.VOL_PARAMS["std_window"]:
-        #                 iv_history =  iv_history[-self.VOL_PARAMS["std_window"]:] # Keep only the window size
-        #             traderData['vol_iv_history'][strike_key] = iv_history
+                # Update IV History (handle NaN IV)
+                if not np.isnan(actual_v_t):
+                    iv_history = traderData['vol_iv_history'].get(strike_key, [])
+                    iv_history.append(actual_v_t)
+                    # Limit history length
+                    if len(iv_history) > self.VOL_PARAMS["std_window"]:
+                        iv_history =  iv_history[-self.VOL_PARAMS["std_window"]:] # Keep only the window size
+                    traderData['vol_iv_history'][strike_key] = iv_history
 
-        #             # Calculate Z-Score if enough history
-        #             if len(iv_history) >= self.VOL_PARAMS["std_window"]:
-        #                 hist = traderData['vol_iv_history'][strike_key]
-        #                 std_dev = np.std(iv_history)
-        #                 mean_vol = self.VOL_PARAMS["mean_volatility"].get(strike_key, 0.7) # Use strike-specific or default mean
+                    # Calculate Z-Score if enough history
+                    if len(iv_history) >= self.VOL_PARAMS["std_window"]:
+                        hist = traderData['vol_iv_history'][strike_key]
+                        std_dev = np.std(iv_history)
+                        mean_vol = self.VOL_PARAMS["mean_volatility"].get(strike_key, 0.7) # Use strike-specific or default mean
 
-        #                 if std_dev > 1e-6: # Avoid division by zero
-        #                     vol_z_score = (actual_v_t - mean_vol) / std_dev
-        #                     logger.print(f"{symbol}: IV={actual_v_t:.4f}, Mean={mean_vol:.4f}, Std={std_dev:.4f}, Z={vol_z_score:.2f}")
+                        if std_dev > 1e-6: # Avoid division by zero
+                            vol_z_score = (actual_v_t - mean_vol) / std_dev
+                            logger.print(f"{symbol}: IV={actual_v_t:.4f}, Mean={mean_vol:.4f}, Std={std_dev:.4f}, Z={vol_z_score:.2f}")
 
-        #                     # Generate Orders based on Z-Score
-        #                     trade_qty = self.VOL_PARAMS["trade_size"]
-        #                     z_thresh = self.VOL_PARAMS["zscore_threshold"]
+                            # Generate Orders based on Z-Score
+                            trade_qty = self.VOL_PARAMS["trade_size"]
+                            z_thresh = self.VOL_PARAMS["zscore_threshold"]
 
-        #                     if vol_z_score > z_thresh: # IV too high -> Sell Voucher
-        #                         qty_to_sell = min(trade_qty, voucher_state.possible_sell_amt)
-        #                         if qty_to_sell > 0:
-        #                             order_price = voucher_state.best_bid # Hit best bid
-        #                             if order_price is not None: # Ensure there is a bid
-        #                                 order = Order(symbol, order_price, -qty_to_sell)
-        #                                 temp_voucher_orders[symbol].append(order)
-        #                                 logger.print(f"-> VOL SELL {symbol} @ {order_price} x {qty_to_sell} (Z={vol_z_score:.2f})")
-        #                             else: logger.print(f"Cannot SELL {symbol}: No bids")
+                            if vol_z_score > z_thresh: # IV too high -> Sell Voucher
+                                qty_to_sell = min(trade_qty, voucher_state.possible_sell_amt)
+                                if qty_to_sell > 0:
+                                    order_price = voucher_state.best_bid # Hit best bid
+                                    if order_price is not None: # Ensure there is a bid
+                                        order = Order(symbol, order_price, -qty_to_sell)
+                                        temp_voucher_orders[symbol].append(order)
+                                        logger.print(f"-> VOL SELL {symbol} @ {order_price} x {qty_to_sell} (Z={vol_z_score:.2f})")
+                                    else: logger.print(f"Cannot SELL {symbol}: No bids")
 
-        #                     elif vol_z_score < -z_thresh: # IV too low -> Buy Voucher
-        #                         qty_to_buy = min(trade_qty, voucher_state.possible_buy_amt)
-        #                         if qty_to_buy > 0:
-        #                             order_price = voucher_state.best_ask # Hit best ask
-        #                             if order_price is not None: # Ensure there is an ask
-        #                                 order = Order(symbol, order_price, qty_to_buy)
-        #                                 temp_voucher_orders[symbol].append(order)
-        #                                 logger.print(f"-> VOL BUY {symbol} @ {order_price} x {qty_to_buy} (Z={vol_z_score:.2f})")
-        #                             else: logger.print(f"Cannot BUY {symbol}: No asks")
+                            elif vol_z_score < -z_thresh: # IV too low -> Buy Voucher
+                                qty_to_buy = min(trade_qty, voucher_state.possible_buy_amt)
+                                if qty_to_buy > 0:
+                                    order_price = voucher_state.best_ask # Hit best ask
+                                    if order_price is not None: # Ensure there is an ask
+                                        order = Order(symbol, order_price, qty_to_buy)
+                                        temp_voucher_orders[symbol].append(order)
+                                        logger.print(f"-> VOL BUY {symbol} @ {order_price} x {qty_to_buy} (Z={vol_z_score:.2f})")
+                                    else: logger.print(f"Cannot BUY {symbol}: No asks")
 
-        #                 else:
-        #                     logger.print(f"{symbol}: Std Dev near zero, skipping Z-score signal.")
-        #         else:
-        #             logger.print(f"{symbol}: IV calculation failed or NaN, skipping Z-score.")
+                        else:
+                            logger.print(f"{symbol}: Std Dev near zero, skipping Z-score signal.")
+                else:
+                    logger.print(f"{symbol}: IV calculation failed or NaN, skipping Z-score.")
 
-        #         # --- Calculate Delta for Hedging (using current IV) ---
-        #         if not np.isnan(actual_v_t) and actual_v_t > 1e-6:
-        #             delta = calculate_delta(spot_volcanic, K, TTE, r, actual_v_t)
-        #         else:
-        #             delta = 1.0 if spot_volcanic > K else 0.0
+                # --- Calculate Delta for Hedging (using current IV) ---
+                if not np.isnan(actual_v_t) and actual_v_t > 1e-6:
+                    delta = calculate_delta(spot_volcanic, K, TTE, r, actual_v_t)
+                else:
+                    delta = 1.0 if spot_volcanic > K else 0.0
 
-        #         # Persist the computed delta by strike
-        #         Trader.voucher_deltas[str(int(K))] = delta
-        #         logger.print(f"[Delta Info] For strike {K}: Delta = {delta:.2f}")
+                # Persist the computed delta by strike
+                Trader.voucher_deltas[str(int(K))] = delta
+                logger.print(f"[Delta Info] For strike {K}: Delta = {delta:.2f}")
 
-        #         # --- End Delta Calc ---
+                # --- End Delta Calc ---
 
-        #         # --- Accumulate Delta Change from New Orders ---
-        #         for order in temp_voucher_orders[symbol]:
-        #              net_voucher_delta_change += self.voucher_deltas[symbol] * order.quantity
-        #         # --- End Accumulate Delta ---
+                # --- Accumulate Delta Change from New Orders ---
+                for order in temp_voucher_orders[symbol]:
+                     net_voucher_delta_change += self.voucher_deltas[symbol] * order.quantity
+                # --- End Accumulate Delta ---
 
-        #     except Exception as e:
-        #         logger.print(f"Error processing {symbol} (strike {K}): {type(e).__name__} - {e!r}")
-        #         self.voucher_deltas.pop(symbol, None)# Clear delta if error
-
-
-        # # 3. Calculate Net Portfolio Delta and Hedge Order
-        # current_portfolio_delta = 0.0
-        # # Sum delta of existing positions
-        # for symbol in voucher_symbols:
-        #     # Ensure position exists before accessing
-        #     position = voucher_states[symbol].position if symbol in state.position else 0
-        #     delta = self.voucher_deltas.get(symbol, 0.0) # Use stored delta
-        #     current_portfolio_delta += position * delta
-
-        # # Total delta after planned trades
-        # total_target_delta = current_portfolio_delta + net_voucher_delta_change
-
-        # # Calculate desired hedge position & order quantity
-        # target_hedge_position = -round(total_target_delta)
-        # current_hedge_position = self.state_volcanic_rock.position
-        # hedge_order_qty = target_hedge_position - current_hedge_position
-
-        # # Apply VOLCANIC_ROCK position limits
-        # hedge_limit = self.state_volcanic_rock.position_limit
-        # if hedge_order_qty > 0: # Buying hedge
-        #     hedge_order_qty = min(hedge_order_qty, hedge_limit - current_hedge_position)
-        # elif hedge_order_qty < 0: # Selling hedge
-        #     hedge_order_qty = max(hedge_order_qty, -hedge_limit - current_hedge_position)
-
-        # logger.print(f"Delta Hedge: CurrentVoucherDelta={current_portfolio_delta:.2f}, NewTradeDelta={net_voucher_delta_change:.2f}, TargetNetDelta={total_target_delta:.2f}")
-        # logger.print(f"Hedge Calc: TargetHedgePos={target_hedge_position}, CurrentHedgePos={current_hedge_position}, OrderQty={hedge_order_qty}")
-
-        # # Create hedge order for VOLCANIC_ROCK if needed
-        # if abs(hedge_order_qty) > 0:
-        #     best_bid_vr = self.state_volcanic_rock.best_bid
-        #     best_ask_vr = self.state_volcanic_rock.best_ask
-        #     hedge_price = None
-
-        #     if hedge_order_qty > 0 and best_ask_vr is not None: # Buying hedge
-        #          hedge_price = best_ask_vr # Hit best ask
-        #     elif hedge_order_qty < 0 and best_bid_vr is not None: # Selling hedge
-        #          hedge_price = best_bid_vr # Hit best bid
-
-        #     if hedge_price is not None : # Place order only if price is valid
-        #         hedge_order = Order("VOLCANIC_ROCK", hedge_price, hedge_order_qty)
-        #         logger.print(f"-> HEDGE ORDER: {hedge_order.symbol} @ {hedge_order.price} x {hedge_order.quantity}")
-        #         if "VOLCANIC_ROCK" not in result: result["VOLCANIC_ROCK"] = []
-        #         result["VOLCANIC_ROCK"].append(hedge_order)
-        #     else:
-        #         logger.print(f"Cannot place hedge order: Invalid market BBO for VOLCANIC_ROCK")
-        # else:
-        #      logger.print("No hedge order needed.")
+            except Exception as e:
+                logger.print(f"Error processing {symbol} (strike {K}): {type(e).__name__} - {e!r}")
+                self.voucher_deltas.pop(symbol, None)# Clear delta if error
 
 
-        # # --- Combine Orders ---
-        # # Add generated voucher orders to the main result dictionary
-        # for symbol, orders in temp_voucher_orders.items():
-        #     if orders:
-        #          if symbol not in result: result[symbol] = []
-        #          result[symbol].extend(orders)
+        # 3. Calculate Net Portfolio Delta and Hedge Order
+        current_portfolio_delta = 0.0
+        # Sum delta of existing positions
+        for symbol in voucher_symbols:
+            # Ensure position exists before accessing
+            position = voucher_states[symbol].position if symbol in state.position else 0
+            delta = self.voucher_deltas.get(symbol, 0.0) # Use stored delta
+            current_portfolio_delta += position * delta
+
+        # Total delta after planned trades
+        total_target_delta = current_portfolio_delta + net_voucher_delta_change
+
+        # Calculate desired hedge position & order quantity
+        target_hedge_position = -round(total_target_delta)
+        current_hedge_position = self.state_volcanic_rock.position
+        hedge_order_qty = target_hedge_position - current_hedge_position
+
+        # Apply VOLCANIC_ROCK position limits
+        hedge_limit = self.state_volcanic_rock.position_limit
+        if hedge_order_qty > 0: # Buying hedge
+            hedge_order_qty = min(hedge_order_qty, hedge_limit - current_hedge_position)
+        elif hedge_order_qty < 0: # Selling hedge
+            hedge_order_qty = max(hedge_order_qty, -hedge_limit - current_hedge_position)
+
+        logger.print(f"Delta Hedge: CurrentVoucherDelta={current_portfolio_delta:.2f}, NewTradeDelta={net_voucher_delta_change:.2f}, TargetNetDelta={total_target_delta:.2f}")
+        logger.print(f"Hedge Calc: TargetHedgePos={target_hedge_position}, CurrentHedgePos={current_hedge_position}, OrderQty={hedge_order_qty}")
+
+        # Create hedge order for VOLCANIC_ROCK if needed
+        if abs(hedge_order_qty) > 0:
+            best_bid_vr = self.state_volcanic_rock.best_bid
+            best_ask_vr = self.state_volcanic_rock.best_ask
+            hedge_price = None
+
+            if hedge_order_qty > 0 and best_ask_vr is not None: # Buying hedge
+                 hedge_price = best_ask_vr # Hit best ask
+            elif hedge_order_qty < 0 and best_bid_vr is not None: # Selling hedge
+                 hedge_price = best_bid_vr # Hit best bid
+
+            if hedge_price is not None : # Place order only if price is valid
+                hedge_order = Order("VOLCANIC_ROCK", hedge_price, hedge_order_qty)
+                logger.print(f"-> HEDGE ORDER: {hedge_order.symbol} @ {hedge_order.price} x {hedge_order.quantity}")
+                if "VOLCANIC_ROCK" not in result: result["VOLCANIC_ROCK"] = []
+                result["VOLCANIC_ROCK"].append(hedge_order)
+            else:
+                logger.print(f"Cannot place hedge order: Invalid market BBO for VOLCANIC_ROCK")
+        else:
+             logger.print("No hedge order needed.")
+
+
+        # --- Combine Orders ---
+        # Add generated voucher orders to the main result dictionary
+        for symbol, orders in temp_voucher_orders.items():
+            if orders:
+                 if symbol not in result: result[symbol] = []
+                 result[symbol].extend(orders)
         # --- End Combine ---
 
-        ## Remember to delete this traderData when you uncomment
-        traderData = {}
-        conversions = 0
-        macaron_orders, macaron_conv_implied = Trade.macarons_parity(self.state_macarons, conversions)
-        if macaron_orders:
-            result["MAGNIFICENT_MACARONS"] = macaron_orders
-        else:
-            # Ensure the key exists even if no orders are placed
-            result["MAGNIFICENT_MACARONS"] = []
-        
+        foreign_ask = state.observations.conversionObservations["MAGNIFICENT_MACARONS"].askPrice
+        offset = self.choose_offset()
+        px     = int(foreign_ask + offset)
+        qty    = min(100, self.state_macarons.possible_sell_amt)
 
+        # place local sell:
+        order = Order("MAGNIFICENT_MACARONS", px, -qty)
+        result["MAGNIFICENT_MACARONS"] = [order]
 
-        # # update bandit stats:
-        # self.counts[offset]  += 1
-        # self.rewards[offset] += profit
+        # … after the exchange, measure how many actually filled …
+        conv = state.observations.conversionObservations["MAGNIFICENT_MACARONS"]
+        cost_per_unit = conv.askPrice + conv.transportFees + conv.importTariff
+        filled = min(qty, self.state_macarons.best_bid_amount)  # approximate
+        profit = (px - cost_per_unit) * filled
+
+        # update bandit stats:
+        self.counts[offset]  += 1
+        self.rewards[offset] += profit
         # --- Final Steps ---
+        conversions = 0 # Adjust if needed
         final_trader_data = ""
         try:
             final_trader_data = jsonpickle.encode(traderData)
