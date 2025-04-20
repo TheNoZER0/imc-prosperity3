@@ -11,6 +11,13 @@ INF = 1e9
 EMA_PERIOD = 40
 MAX_BASE_QTY = 10
 
+class OwnTrade:
+    def __init__(self, symbol: Symbol, price: int, quantity: int, counter_party: UserId = None) -> None:
+        self.symbol = symbol
+        self.price: int = price
+        self.quantity: int = quantity
+        self.counter_party = counter_party
+
 def compute_time_to_expiry(round_number: int, current_timestamp: int) -> float:
     total_round_units = 7_000_000
     day_units = 1_000_000
@@ -1293,7 +1300,7 @@ class Trader:
 
     def run(self, state: TradingState) -> tuple[dict[Symbol, list[Order]], int, str]:
         Status.cls_update(state)
-        round_number = 4
+        round_number = 5
         current_timestamp = state.timestamp
 
         result = {}
