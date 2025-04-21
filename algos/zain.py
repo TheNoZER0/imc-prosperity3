@@ -991,14 +991,8 @@ class Strategy:
 
 CROISSANTS = "CROISSANTS"
 EMA_PERIOD = 13
-PARITY_MARGIN = 0.5
+PARITY_MARGIN = 0.5      # Window period for the EMA calculation.
 class Trade:
-    CSI = 25                    # Critical Sunlight Index
-    STORAGE_COST = 0.1           # Per unit per timestamp
-    CONVERSION_LIMIT = 10        # Max conversions per tick (assumed from convert_macarons)
-    HOLD_TIME_ESTIMATE = 5      # Estimated timestamps to hold for arb storage cost calc
-    ARB_PROFIT_MARGIN = 19
-    LONG_PERIOD_THRESHOLD = 24
     mid_price_history = {CROISSANTS: []}
     macarons_history = {
         "mid": [],
@@ -1156,153 +1150,38 @@ class Trade:
         orders.extend(Strategy.mm_ou(state=state, fair_price=current_price, gamma=1e-9, order_amount=50))
         return orders
     
-    PM_BASE    = 19        # your original hard‑coded ARB_PROFIT_MARGIN
-    PM_DECAY   = 0.98      # how quickly margin decays back toward base
-    pm_current = PM_BASE   # the live, adaptive margin  
-
     @staticmethod
-    def update_profit_margin(last_tick_profit: float):
-        print(f"[DEBUG] update_profit_margin called with profit={last_tick_profit}, before pm={Trade.pm_current}")
-        if last_tick_profit < 0:
-            Trade.pm_current *= 1.02
-        else:
-            Trade.pm_current = max(Trade.PM_BASE, Trade.pm_current * Trade.PM_DECAY)
-        print(f"[DEBUG] after pm={Trade.pm_current}")
-        
-    RATIO_WINDOW = 200         # max history
-    MIN_LIQ      = 40          # min book depth
-    WARMUP       = 50          # don’t trade until this many samples
-    ratio_hist   = []
-
-    @staticmethod
-    def macaron_volume(state: Status) -> List[Order]:
-        orders: List[Order] = []
-
-        # 1) current book volumes
+    
+    def macaron_volume(state: Status, vol_thresh: float = 1.9) -> List[Order]:
+        orders = []
         bid_vol = sum(amt for _, amt in state.bids)
         ask_vol = sum(-amt for _, amt in state.asks)
-        if ask_vol == 0:
-            return orders
 
-        # 2) update ratio history
-        r = bid_vol/ask_vol
-        Trade.ratio_hist.append(r)
-        if len(Trade.ratio_hist) > Trade.RATIO_WINDOW:
-            Trade.ratio_hist.pop(0)
+        # If bids out‑size asks by 20%+, go long at the ask
+        if bid_vol > vol_thresh * ask_vol and state.possible_buy_amt > 0:
+            orders.append(Order(
+                state.product,
+                state.best_ask,
+                state.possible_buy_amt
+            ))
 
-        # 3) warm‑up
-        n = len(Trade.ratio_hist)
-        if n < Trade.WARMUP:
-            logger.print(f"Macaron Vol: warming up ({n}/{Trade.WARMUP})")
-            return orders
-
-        # 4) compute μ, σ
-        μ = np.mean(Trade.ratio_hist)
-        σ = np.std(Trade.ratio_hist)
-
-        # 5) dynamic k: start at 2.0, decay to 1.0 by WARMUP → RATIO_WINDOW
-        k = 1.0 + max(0.0, min(1.0, (Trade.RATIO_WINDOW - n)/(Trade.RATIO_WINDOW - Trade.WARMUP)))
-        upper = μ + k*σ 
-        lower = μ - k*σ
-
-        logger.print(f"Macaron Vol: r={r:.2f}, μ={μ:.2f}, σ={σ:.2f}, k={k:.2f}, [>{upper:.2f}|<{lower:.2f}]")
-
-        # 6a) BUY
-        if r > upper and bid_vol >= Trade.MIN_LIQ and state.possible_buy_amt > 0:
-            px, qty = state.best_ask, state.possible_buy_amt
-            orders.append(Order(state.product, int(px), qty))
-            logger.print(f"BUY {qty}@{px} (r>{upper:.2f})")
-
-        # 6b) SELL
-        elif r < lower and ask_vol >= Trade.MIN_LIQ and state.possible_sell_amt > 0:
-            px, qty = state.best_bid, state.possible_sell_amt
-            orders.append(Order(state.product, int(px), -qty))
-            logger.print(f"SELL {qty}@{px} (r<{lower:.2f})")
-
-        else:
-            logger.print("Macaron Vol: no signal")
+        # If asks out‑size bids by 20%+, go short at the bid
+        elif ask_vol > vol_thresh * bid_vol and state.possible_sell_amt > 0:
+            orders.append(Order(
+                state.product,
+                state.best_bid,
+                -state.possible_sell_amt
+            ))
 
         return orders
-    
-    @staticmethod
-    def macarons_hybrid_strategy(state: Status,
-                                 sunlight_index: float,
-                                 current_conversions_used: int,
-                                 duration_below_csi: int
-                                 ) -> tuple[List[Order], int]:
-        """
-        Hybrid strategy for Macarons:
-        1. Checks Pristine Cuisine vs Local arbitrage, considering fees and storage cost.
-        2. Applies CSI logic: Panic Buy below CSI, Volume strategy above CSI.
-        3. Manages conversions within limits.
-        """
-        local_orders: List[Order] = []
-        desired_conversions: int = 0
-        remaining_conv_capacity = max(0, Trade.CONVERSION_LIMIT - current_conversions_used)
 
-        # fetch conversion book observations
-        obs = state._state.observations.conversionObservations.get("MAGNIFICENT_MACARONS")
-        if not obs:
-            logger.print("ERROR: Macaron observations not found for hybrid strategy.")
-            return [], 0
-
-        # --- 1. Pristine costs & storage estimate ---
-        pristine_buy_cost    = obs.askPrice + obs.importTariff + obs.transportFees
-        pristine_sell_rev    = obs.bidPrice   - obs.exportTariff - obs.transportFees
-        estimated_storage    = Trade.STORAGE_COST * Trade.HOLD_TIME_ESTIMATE
-
-        logger.print(f"Macaron Hybrid: Sun={sunlight_index}, CSI={Trade.CSI}, RemConv={remaining_conv_capacity}")
-        logger.print(f"Pristine Costs: Buy={pristine_buy_cost:.2f}, Sell={pristine_sell_rev:.2f}, Est.Storage={estimated_storage:.2f}")
-
-        # --- 2a. Arb: Pristine → Local ---
-        total_cost_from_pristine = pristine_buy_cost + estimated_storage
-        local_best_bid = state.best_bid
-        if local_best_bid is not None and local_best_bid > total_cost_from_pristine + Trade.pm_current:
-            profit_per_unit = local_best_bid - total_cost_from_pristine
-            qty_to_arb = min(state.best_bid_amount, state.possible_buy_amt, remaining_conv_capacity)
-            if qty_to_arb > 0:
-                desired_conversions += qty_to_arb
-                remaining_conv_capacity -= qty_to_arb
-                local_orders.append(Order(state.product, local_best_bid, -qty_to_arb))
-                logger.print(f"ARB: Pristine→Local profit={profit_per_unit:.2f}/unit, conv+{qty_to_arb}, sell@{local_best_bid}")
-
-        # --- 2b. Arb: Local → Pristine ---
-        local_best_ask = state.best_ask
-        if local_best_ask is not None and pristine_sell_rev > local_best_ask + Trade.pm_current:
-            profit_per_unit = pristine_sell_rev - local_best_ask
-            qty_to_arb = min(state.best_ask_amount, state.possible_sell_amt, remaining_conv_capacity)
-            if qty_to_arb > 0:
-                desired_conversions -= qty_to_arb
-                remaining_conv_capacity -= qty_to_arb
-                local_orders.append(Order(state.product, local_best_ask, qty_to_arb))
-                logger.print(f"ARB: Local→Pristine profit={profit_per_unit:.2f}/unit, buy@{local_best_ask}, conv–{qty_to_arb}")
-
-        # --- 3. CSI‑based local market logic ---
-        if sunlight_index < Trade.CSI and duration_below_csi >= Trade.LONG_PERIOD_THRESHOLD:
-            # Panic Buy mode
-            logger.print("Macaron Hybrid: Below CSI & long duration → Panic Buy mode")
-            qty_to_buy = state.possible_buy_amt
-            if qty_to_buy > 0 and state.best_ask is not None:
-                threshold_price = pristine_buy_cost + estimated_storage + Trade.pm_current * 1.2
-                if state.best_ask <= threshold_price:
-                    local_orders.append(Order(state.product, state.best_ask, qty_to_buy))
-                    logger.print(f"Panic Buy: {qty_to_buy}@{state.best_ask}")
-                else:
-                    logger.print(f"Panic Buy skipped: ask {state.best_ask} > thresh {threshold_price:.2f}")
-        else:
-            # Supply/Demand volume imbalance
-            mode = "below CSI but short duration" if sunlight_index < Trade.CSI else "above CSI"
-            logger.print(f"Macaron Hybrid: {mode} → Volume‑imbalance mode")
-            vol_orders = Trade.macaron_volume(state)
-            if vol_orders:
-                logger.print(f"Adding {len(vol_orders)} volume‑imbalance orders")
-                local_orders.extend(vol_orders)
-
-        # --- 4. return assembled orders & conversion requests ---
-        return local_orders, desired_conversions
     
     @staticmethod
     def macarons_parity(state: Status, current_conversions: int) -> tuple[list[Order], int]:
+        """
+        Local ↔ foreign parity arb for MAGNIFICENT_MACARONS,
+        widened by PARITY_MARGIN to cover slippage & fees.
+        """
         STORAGE_COST = 0.1
         obs = state._state.observations.conversionObservations["MAGNIFICENT_MACARONS"]
 
@@ -1364,20 +1243,13 @@ class Trade:
         """
         pos = state.position
         if pos > 0:
-            return -min(pos, 10)
+            return min(pos, 10)
         elif pos < 0:
-            return min(abs(pos), 10)
+            return max(pos, -10)
         return 0
 
     
 class Trader:
-    open_trades: List[Dict[str, Any]] = []
-    max_loss_pct: float    = 0.02    # 2% stop‑loss by default
-    max_loss_abs: float    = 100.0   # or $100 absolute, whichever you prefer
-    def __init__(self):
-        self.macaron_open_trades: List[Dict[str, Any]] = []
-        self.max_loss_per_tick: float = 100.0
-
     state_resin = Status("RAINFOREST_RESIN")
     state_kelp = Status("KELP")
     state_squink = Status("SQUID_INK")
@@ -1393,7 +1265,7 @@ class Trader:
     state_voucher_10500 = Status("VOLCANIC_ROCK_VOUCHER_10500")
     state_volcanic_rock = Status("VOLCANIC_ROCK")
     state_macarons = Status("MAGNIFICENT_MACARONS")
-    macaron_sunlight_below_csi_counter = 0
+
     last_vol_coeffs = None
     voucher_deltas = {}
     
@@ -1406,18 +1278,18 @@ class Trader:
         "trade_size": 200, # default 20
     }
 
-    # def __init__(self):
-    #     self.offsets = list(range(-5, 2))   # try –5 up to +1
-    #     self.counts  = {o:1 for o in self.offsets}
-    #     self.rewards = {o:0.0 for o in self.offsets}
+    def __init__(self):
+        self.offsets = list(range(-5, 2))   # try –5 up to +1
+        self.counts  = {o:1 for o in self.offsets}
+        self.rewards = {o:0.0 for o in self.offsets}
 
-    # def choose_offset(self):
-    #     total = sum(self.counts.values())
-    #     import math
-    #     def ucb(o):
-    #         return (self.rewards[o]/self.counts[o]
-    #                 + math.sqrt(2*math.log(total)/self.counts[o]))
-    #     return max(self.offsets, key=ucb)
+    def choose_offset(self):
+        total = sum(self.counts.values())
+        import math
+        def ucb(o):
+            return (self.rewards[o]/self.counts[o]
+                    + math.sqrt(2*math.log(total)/self.counts[o]))
+        return max(self.offsets, key=ucb)
 
     def run(self, state: TradingState) -> tuple[dict[Symbol, list[Order]], int, str]:
         Status.cls_update(state)
@@ -1425,51 +1297,20 @@ class Trader:
         current_timestamp = state.timestamp
 
         result = {}
-        # track how much P&L we generate this tick
-        this_tick_profit = 0.0
 
-        
-
-
-        # Round 1 orders:
+        #Round 1 orders:
         result["RAINFOREST_RESIN"] = Trade.resin(self.state_resin)
         result["KELP"] = Trade.kelp(self.state_kelp)
         result["SQUID_INK"] = Trade.ema_mean_reversion(self.state_squink)
 
-        # # Round 2 orders:
+        # Round 2 orders:
         result["PICNIC_BASKET1"] = Trade.basket_1(self.state_picnic1, self.state_jam, self.state_djembes, self.state_croiss)
         result["JAMS"] = Trade.jams(self.state_jam)
         result["PICNIC_BASKET2"] = Trade.basket_2(self.state_picnic2, self.state_jam, self.state_djembes, self.state_croiss)
         result["DJEMBES"] = Trade.djmb_crs_pair(self.state_djembes, self.state_croiss)
         result["CROISSANTS"] = Trade.croissant_ema(self.state_croiss)
-
-        # choose your cointegration vector [w1, w2], mean & threshold from backtest
-        coint_vec = np.array([ 1.0, -1.0 ])        # e.g. long Basket1, short Basket2
-        pairs_mu   = 0.0                           # historical mean of spread(B1,B2)
-        theta      = 1.0                           # how wide the band is
-        sigma      = 0.1                           # approx std dev of spread
-        basket_pair_orders = Strategy.pair_trade(
-            croissant=self.state_picnic1,
-            djembes  =self.state_picnic2,
-            pairs_mu =pairs_mu,
-            theta    =theta,
-            sigma    =sigma,
-            threshold=1,
-            coint_vec=coint_vec
-        )
-        if basket_pair_orders:
-            result["PICNIC_PAIR"] = basket_pair_orders
-            # --- Volcanic Strategy (Round 3) ---
-            # Define voucher symbols, states, and strikes
-
-
-
-
-
-
-
         # --- Volcanic Strategy (Round 3) ---
-        ### Start uncomment
+        # Define voucher symbols, states, and strikes
         voucher_symbols = [
             "VOLCANIC_ROCK_VOUCHER_9500", "VOLCANIC_ROCK_VOUCHER_9750",
             "VOLCANIC_ROCK_VOUCHER_10000", "VOLCANIC_ROCK_VOUCHER_10250",
@@ -1493,7 +1334,7 @@ class Trader:
              logger.flush(state, result, 0, "AttributeError") # Log error and exit run
              return result, 0, "AttributeError"
         
-        # # --- Decode TraderData ---
+        # --- Decode TraderData ---
         traderData = {}
         if state.traderData:
             try:
@@ -1501,12 +1342,9 @@ class Trader:
             except Exception as e:
                 logger.print(f"Error decoding traderData: {e}")
                 traderData = {} # Start fresh if decode fails
-        last_profit = traderData.get("last_tick_profit", 0.0)
-        # # --- End Decode ---
-        traderData.pop("CSI", None)
-        traderData.pop("last_tick_profit", None)
+        # --- End Decode ---
 
-        Trade.update_profit_margin(last_profit)
+        
         
         strikes = {
             "VOLCANIC_ROCK_VOUCHER_9500": 9500, "VOLCANIC_ROCK_VOUCHER_9750": 9750,
@@ -1717,144 +1555,28 @@ class Trader:
                  result[symbol].extend(orders)
         # --- End Combine ---
 
-        ########### End uncomment ###########
+        foreign_ask = state.observations.conversionObservations["MAGNIFICENT_MACARONS"].askPrice
+        offset = self.choose_offset()
+        px     = int(foreign_ask + offset)
+        qty    = min(100, self.state_macarons.possible_sell_amt)
 
-        # foreign_ask = state.observations.conversionObservations["MAGNIFICENT_MACARONS"].askPrice
-        # offset = self.choose_offset()
-        # px     = int(foreign_ask + offset)
-        # qty    = min(100, self.state_macarons.possible_sell_amt)
+        # place local sell:
+        order = Order("MAGNIFICENT_MACARONS", px, -qty)
+        result["MAGNIFICENT_MACARONS"] = [order]
 
-        # # place local sell:
-        # order = Order("MAGNIFICENT_MACARONS", px, -qty)
-        # result["MAGNIFICENT_MACARONS"] = [order]
+        # … after the exchange, measure how many actually filled …
+        conv = state.observations.conversionObservations["MAGNIFICENT_MACARONS"]
+        cost_per_unit = conv.askPrice + conv.transportFees + conv.importTariff
+        filled = min(qty, self.state_macarons.best_bid_amount)  # approximate
+        profit = (px - cost_per_unit) * filled
 
-        # # … after the exchange, measure how many actually filled …
-        # conv = state.observations.conversionObservations["MAGNIFICENT_MACARONS"]
-        # cost_per_unit = conv.askPrice + conv.transportFees + conv.importTariff
-        # filled = min(qty, self.state_macarons.best_bid_amount)  # approximate
-        # profit = (px - cost_per_unit) * filled
-
-        # # update bandit stats:
-        # self.counts[offset]  += 1
-        # self.rewards[offset] += profit
-        conversions = 0 
-
-        #  --- STOP‑LOSS: flatten any trade that’s in loss more than threshold ---
-        stop_pct = 0.02    # e.g. 2% move against you
-        stop_orders = []
-        for trade in self.macaron_open_trades:
-            qty, entry = trade["qty"], trade["entry_price"]
-            # if you’re long (qty>0) check best_bid; if short, check best_ask
-            current = state.order_depths["MAGNIFICENT_MACARONS"].best_bid if qty>0 else state.order_depths["MAGNIFICENT_MACARONS"].best_ask
-            # normalized P&L
-            pnl_pct = (current - entry)/entry if qty>0 else (entry - current)/entry
-            if pnl_pct < -stop_pct:
-                # go flat
-                stop_orders.append(Order(
-                    "MAGNIFICENT_MACARONS",
-                    int(current),
-                    -qty
-                ))
-        # emit these immediately, and clear them from open_trades
-        if stop_orders:
-            result.setdefault("MAGNIFICENT_MACARONS", []).extend(stop_orders)
-            logger.print(f"STOP‑LOSS: closing {len(stop_orders)} macaron trades at {stop_pct*100:.1f}% loss")
-            # remove all open trades (we assume full fill)
-            self.macaron_open_trades.clear()
-            # and *skip* any further macaron logic this tick:
-            logger.flush(state, result, conversions, final_trader_data)
-            return result, conversions, final_trader_data
-
-
-
-
-        # --- Magnificent Macarons Hybrid Strategy ---
-        product = "MAGNIFICENT_MACARONS"
-        if product in state.observations.conversionObservations:
-            obs_macaron = state.observations.conversionObservations[product]
-            current_sunlight = obs_macaron.sunlightIndex
-            logger.print(f"Processing Macarons: Sunlight={current_sunlight}")
-
-            # --- Update Sunlight Duration Counter ---
-            if current_sunlight < Trade.CSI:
-                self.macaron_sunlight_below_csi_counter += 1
-                logger.print(f"Sunlight below CSI. Counter incremented to: {self.macaron_sunlight_below_csi_counter}")
-            else:
-                if self.macaron_sunlight_below_csi_counter > 0:
-                    logger.print(f"Sunlight >= CSI. Resetting counter from: {self.macaron_sunlight_below_csi_counter}")
-                self.macaron_sunlight_below_csi_counter = 0
-            # --- End Update ---
-
-            # Apply the new hybrid strategy, passing the duration counter
-            macaron_local_orders, macaron_arb_conversions = Trade.macarons_hybrid_strategy(
-                self.state_macarons,
-                current_sunlight,
-                conversions, # Pass current conversions used so far
-                self.macaron_sunlight_below_csi_counter # Pass the duration counter
-            )
-
-            # Add local market orders generated by the hybrid strategy
-            if macaron_local_orders:
-                if product not in result: result[product] = []
-                result[product].extend(macaron_local_orders)
-                logger.print(f"Hybrid Strategy added {len(macaron_local_orders)} local orders for Macarons.")
-
-            # Add desired arbitrage conversions to the total conversions for this tick
-            if macaron_arb_conversions != 0:
-                logger.print(f"Hybrid Strategy requests {macaron_arb_conversions} conversions for Macarons.")
-                # Check if adding these conversions exceeds the limit
-                if abs(conversions + macaron_arb_conversions) <= Trade.CONVERSION_LIMIT:
-                     conversions += macaron_arb_conversions
-                else:
-                     # Prioritize arb conversions up to the limit
-                     can_add = Trade.CONVERSION_LIMIT - abs(conversions)
-                     if macaron_arb_conversions > 0:
-                         actual_conv = min(macaron_arb_conversions, can_add)
-                     else: # Negative conversions
-                         actual_conv = max(macaron_arb_conversions, -can_add)
-
-                     if actual_conv != 0:
-                         conversions += actual_conv
-                         logger.print(f"WARN: Capped Macaron arb conversions at {actual_conv} due to limit. Total now: {conversions}")
-                     else:
-                         logger.print(f"WARN: Cannot perform Macaron arb conversions ({macaron_arb_conversions}) due to limit. Total: {conversions}")
-
-
-            #Optional: Add position flattening using conversions (runs *after* arbitrage check)
-            flatten_conversions = Trade.convert_macarons(self.state_macarons)
-            if flatten_conversions != 0:
-                logger.print(f"Position Flattening requests {flatten_conversions} conversions for Macarons.")
-                remaining_conv_capacity_after_arb = Trade.CONVERSION_LIMIT - abs(conversions)
-                if remaining_conv_capacity_after_arb > 0:
-                    if flatten_conversions > 0: # Need to buy back
-                        actual_flatten_conv = min(flatten_conversions, remaining_conv_capacity_after_arb)
-                    else: # Need to sell off
-                        actual_flatten_conv = max(flatten_conversions, -remaining_conv_capacity_after_arb)
-
-                    if actual_flatten_conv != 0:
-                        conversions += actual_flatten_conv
-                        logger.print(f"Applied {actual_flatten_conv} flattening conversions. Total now: {conversions}")
-                    else:
-                        logger.print("Cannot apply flattening conversions due to limit.")
-                else:
-                    logger.print("No conversion capacity left for flattening.")
-
-
-        else:
-            logger.print(f"Warning: {product} observations not found. Cannot run hybrid strategy.")
-
-
-        # final_trader_data = ""
-        # try:
-        #     final_trader_data = jsonpickle.encode(traderData)
-        # except Exception as e:
-        #     logger.print(f"Error encoding traderData: {e}")
-
+        # update bandit stats:
+        self.counts[offset]  += 1
+        self.rewards[offset] += profit
         # --- Final Steps ---
+        conversions = 0 # Adjust if needed
         final_trader_data = ""
         try:
-            traderData["last_tick_profit"] = this_tick_profit
-            traderData['macaron_csi']   = Trade.CSI
             final_trader_data = jsonpickle.encode(traderData)
         except Exception as e:
             logger.print(f"Error encoding traderData: {e}")
