@@ -12,16 +12,23 @@ EMA_PERIOD = 40
 MAX_BASE_QTY = 10
 MACARON_PRODUCT = "MAGNIFICENT_MACARONS"
 MACARON_POSITION_LIMIT = 75
-MACARON_CSI_THRESHOLD = 35  # Tune this parameter
-MACARON_CSI_SUSTAINED_TICKS = 20  # Tune this: How many ticks below CSI to trigger panic
-MACARON_STORAGE_COST_PER_TICK = 0.1 / 100 # 0.1 per 100 timestamps = 0.001 per tick
-MACARON_FLATTEN_START_TIMESTAMP = 99000 # Start actively flattening
-MACARON_FORCE_FLATTEN_TIMESTAMP = 99500 # Get more aggressive after this time
-MACARON_END_OF_ROUND_TIMESTAMP = 99990 # Last trading timestamp
+MACARON_CSI_THRESHOLD = 40
+MACARON_CSI_SUSTAINED_TICKS = 15
+MACARON_STORAGE_COST_PER_TICK = 0.1 / 100 # 0.001 per tick (less impactful in this model)
 MACARON_CONVERSION_LIMIT = 10
-MACARON_DEFAULT_SPREAD = 1.5 # Base spread for MM
-MACARON_MM_ORDER_SIZE = 10   # Default size for MM orders
-MACARON_ARB_PROFIT_MARGIN = 10 # Minimum profit per unit for arb
+MACARON_DEFAULT_SPREAD = 10 # Base spread, will be adapted
+MACARON_MM_ORDER_SIZE = 10
+# Adaptive Edge Params (Tune these heavily)
+MACARON_ADAPT_EDGE_STEP = 0.1
+MACARON_ADAPT_MIN_EDGE = 0.5
+MACARON_ADAPT_MAX_EDGE = 4.0 # Allow wider max edge
+MACARON_ADAPT_POS_HIST_LEN = 5
+MACARON_ADAPT_VOL_THRESH_UP = 25 # Pos Std Dev threshold to increase edge
+MACARON_ADAPT_VOL_THRESH_DOWN = 10 # Pos Std Dev threshold to decrease edge
+MACARON_ADAPT_POS_THRESH_DOWN = 10 # Max position abs value to allow edge decrease
+# Take Logic Probability Factor (similar to Orchid make_probability) - Scales edge for taking
+MACARON_TAKE_EDGE_PROB_FACTOR = 0.6 # Tune: Aggressiveness of taking vs implied price
+
 
 
 def compute_time_to_expiry(round_number: int, current_timestamp: int) -> float:
@@ -848,321 +855,275 @@ class Status:
             return 0
         
 
-# State persistence for Macaron Strategy
+# --- State Persistence ---
 class MacaronStrategyState:
     def __init__(self):
         self.ticks_below_csi = 0
+        self.current_edge = MACARON_DEFAULT_SPREAD
+        self.position_history = [] # Stores actual positions from previous ticks
 
     def to_dict(self):
-        return {"ticks_below_csi": self.ticks_below_csi}
+        return {
+            "ticks_below_csi": self.ticks_below_csi,
+            "current_edge": self.current_edge,
+            "position_history": list(self.position_history) # Ensure serializable list
+        }
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]):
         instance = cls()
         instance.ticks_below_csi = data.get("ticks_below_csi", 0)
+        instance.current_edge = data.get("current_edge", MACARON_DEFAULT_SPREAD)
+        # Ensure history is loaded as a list
+        loaded_history = data.get("position_history", [])
+        instance.position_history = list(loaded_history) if isinstance(loaded_history, (list, np.ndarray)) else []
+
+        # Limit history length on load just in case
+        hist_len = MACARON_ADAPT_POS_HIST_LEN
+        if len(instance.position_history) > hist_len:
+             instance.position_history = instance.position_history[-hist_len:]
         return instance
 
-
+# --- Strategy Class ---
 class MacaronStrategy:
-    """
-    A robust strategy for MAGNIFICENT_MACARONS focusing on stability and end-of-round risk.
-    """
     def __init__(self, logger_instance):
         self.logger = logger_instance
         self.strategy_state = MacaronStrategyState()
 
+    # --- State Management (load/save/update_csi - keep as before) ---
     def update_state_from_traderdata(self, traderData: Dict[str, Any]):
-        """Loads the strategy-specific state from the traderData dictionary."""
         if MACARON_PRODUCT in traderData:
             self.strategy_state = MacaronStrategyState.from_dict(traderData[MACARON_PRODUCT])
         else:
-            self.strategy_state = MacaronStrategyState() # Initialize if not found
+            self.strategy_state = MacaronStrategyState()
 
     def save_state_to_traderdata(self, traderData: Dict[str, Any]):
-        """Saves the strategy-specific state into the traderData dictionary."""
         traderData[MACARON_PRODUCT] = self.strategy_state.to_dict()
 
     def _update_csi_state(self, sunlight_index: float):
-        """Updates the count of consecutive ticks the sunlight index is below the CSI threshold."""
         if sunlight_index < MACARON_CSI_THRESHOLD:
             self.strategy_state.ticks_below_csi += 1
         else:
             self.strategy_state.ticks_below_csi = 0
 
     def _get_trading_mode(self, timestamp: int) -> str:
-        """Determines the current trading mode based on timestamp and CSI state."""
-        if timestamp >= MACARON_FLATTEN_START_TIMESTAMP:
-            return "FLATTENING"
+        # Keep modes, might be used to influence edge adaptation or aggression
+        # Flattening mode is less critical now but can be a fallback
+        if timestamp >= 995000: # Make flattening more urgent later?
+             return "FLATTENING_URGENT"
+        elif timestamp >= 990000:
+             return "FLATTENING_NORMAL"
         elif self.strategy_state.ticks_below_csi >= MACARON_CSI_SUSTAINED_TICKS:
             return "PANIC"
         else:
             return "NORMAL"
+    
+     # --- Core Logic ---
 
-    def _calculate_pristine_levels(self, obs: ConversionObservation, position: int) -> Tuple[float, float]:
-        """Calculates the effective cost to buy from Pristine and revenue to sell to Pristine."""
-        # Approximate storage cost impact - slightly increase buy cost, decrease sell revenue if long
-        storage_adj = MACARON_STORAGE_COST_PER_TICK * 5 # Approx cost over next 5 ticks if long
-        
+    def _calculate_pristine_levels(self, obs: ConversionObservation) -> Tuple[float, float]:
+        """Calculates the raw cost to buy from / sell revenue to Pristine."""
+        # Simplified: Raw levels, edge will account for desired profit/risk.
+        # Storage cost (0.1 per 100 timestamps) is minor per tick (0.001)
+        # compared to fees/tariffs, ignore for baseline levels.
         pristine_buy_cost = obs.askPrice + obs.transportFees + obs.importTariff
         pristine_sell_revenue = obs.bidPrice - obs.transportFees - obs.exportTariff
-
-        if position > 0:
-             pristine_buy_cost += storage_adj
-             # Selling reduces long pos, so could be seen as saving future cost
-             # pristine_sell_revenue += storage_adj # Option: slightly increase sell revenue target
-        elif position < 0:
-             # Buying reduces short pos, no storage cost impact
-             pass
-
         return pristine_buy_cost, pristine_sell_revenue
 
-    def _calculate_fair_value(self, state: Status, obs: ConversionObservation, mode: str) -> float:
-        """Calculates the strategy's fair value estimate."""
-        local_mid = state.mid
-        if np.isnan(local_mid): # Handle cases where local book might be empty initially
-             local_mid = (obs.bidPrice + obs.askPrice) / 2.0 # Use pristine mid as fallback
+    def _adapt_edge(self, current_position: int, timestamp: int, mode: str) -> float:
+        """ Adapts the trading edge based on recent position volatility and current mode. """
+        # Use actual position from start of tick for history
+        self.strategy_state.position_history.append(current_position)
+        if len(self.strategy_state.position_history) > MACARON_ADAPT_POS_HIST_LEN:
+            self.strategy_state.position_history.pop(0)
 
-        pristine_mid = (obs.bidPrice + obs.askPrice) / 2.0
+        if len(self.strategy_state.position_history) < MACARON_ADAPT_POS_HIST_LEN or timestamp < 1000: # Allow warmup
+            return self.strategy_state.current_edge # Not enough data or too early
 
-        # Weighted average, potentially giving more weight to local market if liquid
-        # For simplicity, using simple average now.
-        fair_value = (local_mid + pristine_mid) / 2.0
+        pos_std_dev = np.std(self.strategy_state.position_history)
+        current_edge = self.strategy_state.current_edge
+        edge_changed = False
 
-        # Adjustments
+        # Increase edge if volatile
+        if pos_std_dev > MACARON_ADAPT_VOL_THRESH_UP:
+            current_edge = min(MACARON_ADAPT_MAX_EDGE, current_edge + MACARON_ADAPT_EDGE_STEP)
+            self.logger.print(f"Edge INC to {current_edge:.2f} (Vol: {pos_std_dev:.2f})")
+            edge_changed = True
+        # Decrease edge if stable near zero
+        elif pos_std_dev < MACARON_ADAPT_VOL_THRESH_DOWN and abs(current_position) < MACARON_ADAPT_POS_THRESH_DOWN:
+            current_edge = max(MACARON_ADAPT_MIN_EDGE, current_edge - MACARON_ADAPT_EDGE_STEP)
+            self.logger.print(f"Edge DEC to {current_edge:.2f} (Vol: {pos_std_dev:.2f}, Pos: {current_position})")
+            edge_changed = True
+
+        # Mode adjustments (optional)
         if mode == "PANIC":
-            # Assume prices tend higher in panic, adjust fair value up slightly
-            fair_value *= 1.001 # Small multiplier, tune this
-            # Could also factor in obs.sugarPrice if it correlates strongly
+             # Ensure edge doesn't get too tight in panic
+             current_edge = max(current_edge, MACARON_DEFAULT_SPREAD * 1.2) # e.g., 120% of default
+        elif "FLATTENING" in mode:
+             # Maybe slightly tighten edge to encourage fills for flattening? Or rely on take logic?
+             pass # For now, rely on take logic / conversion
 
-        # Inventory adjustment: slightly decrease FV if long, increase if short
-        # This encourages returning to neutral, accounting for storage cost / risk
-        inv_factor = state.rt_position / MACARON_POSITION_LIMIT
-        fair_value -= inv_factor * 0.5 # Small adjustment, tune this scaling factor
+        if edge_changed:
+            self.strategy_state.position_history = [] # Reset history after change
 
-        return fair_value
+        self.strategy_state.current_edge = current_edge
+        return current_edge
 
-    def _flatten_position(self, state: Status, timestamp: int) -> Tuple[List[Order], int]:
-        """Aggressively tries to flatten the position towards the end of the round."""
+    def _request_conversion(self, current_position: int) -> int:
+        """ Determines the conversion amount to request to flatten position. """
+        if current_position == 0:
+            return 0
+        conversion_amount = -current_position
+        clipped_conversion = max(-MACARON_CONVERSION_LIMIT, min(MACARON_CONVERSION_LIMIT, conversion_amount))
+        return clipped_conversion
+
+    def _take_local_orders(self, state: Status, pristine_buy_cost: float, pristine_sell_revenue: float, edge: float, prob_factor: float) -> List[Order]:
+        """ Takes aggressive orders if local price beats implied + scaled edge. """
         orders = []
-        conversions_requested = 0
-        target_position = 0
-        current_position = state.rt_position # Use internal real-time estimate
-        position_delta = target_position - current_position
+        effective_take_edge = edge * prob_factor
 
-        if position_delta == 0:
-            self.logger.print("Flattening: Already flat.")
-            return [], 0
+        # Buy Takes: Local Ask < Implied Sell Revenue - Effective Edge
+        buy_threshold = pristine_sell_revenue - effective_take_edge
+        sorted_asks = sorted(state.asks)
+        for price, available_volume in sorted_asks:
+             if price < buy_threshold:
+                 qty_to_buy = min(-available_volume, state.possible_buy_amt) # Respect available + limit
+                 if qty_to_buy > 0:
+                     orders.append(Order(MACARON_PRODUCT, price, qty_to_buy))
+                     state.rt_position_update(state.rt_position + qty_to_buy) # Update internal tracker
+                     self.logger.print(f"Take Buy: {qty_to_buy}@{price} (Threshold < {buy_threshold:.2f})")
+                     if state.rt_position == MACARON_POSITION_LIMIT: break # Stop if limit hit
+             else:
+                 break # Prices sorted ascending
 
-        self.logger.print(f"Flattening: Pos={current_position}, Target=0, Delta={position_delta}")
-        
-        # Determine aggression level based on time
-        is_urgent = timestamp >= MACARON_FORCE_FLATTEN_TIMESTAMP
+        # Sell Takes: Local Bid > Implied Buy Cost + Effective Edge
+        sell_threshold = pristine_buy_cost + effective_take_edge
+        sorted_bids = sorted(state.bids, reverse=True)
+        for price, available_volume in sorted_bids:
+              if price > sell_threshold:
+                  qty_to_sell = min(available_volume, state.possible_sell_amt) # Respect available + limit
+                  if qty_to_sell > 0:
+                      orders.append(Order(MACARON_PRODUCT, price, -qty_to_sell))
+                      state.rt_position_update(state.rt_position - qty_to_sell) # Update internal tracker
+                      self.logger.print(f"Take Sell: {-qty_to_sell}@{price} (Threshold > {sell_threshold:.2f})")
+                      if state.rt_position == -MACARON_POSITION_LIMIT: break # Stop if limit hit
+              else:
+                   break # Prices sorted descending
 
-        # --- Market Orders ---
-        if position_delta > 0: # Need to BUY
-            volume_needed = position_delta
-            sorted_asks = sorted(state.asks)
-            for price, available_volume in sorted_asks:
-                if volume_needed <= 0: break
-                
-                # If urgent, take aggressive price; otherwise, maybe only take up to fair_value + small margin?
-                # For simplicity now, just take available liquidity within limits
-                
-                trade_volume = min(volume_needed, -available_volume, state.possible_buy_amt)
-                if trade_volume > 0:
-                    orders.append(Order(MACARON_PRODUCT, price, trade_volume))
-                    state.rt_position_update(state.rt_position + trade_volume)
-                    volume_needed -= trade_volume
-                    self.logger.print(f"Flatten Buy (Market): {trade_volume}@{price}")
-                    if state.rt_position == target_position: break # Check if flat after order
+        return orders
 
-        elif position_delta < 0: # Need to SELL
-            volume_needed = -position_delta
-            sorted_bids = sorted(state.bids, reverse=True)
-            for price, available_volume in sorted_bids:
-                if volume_needed <= 0: break
 
-                trade_volume = min(volume_needed, available_volume, state.possible_sell_amt)
-                if trade_volume > 0:
-                    orders.append(Order(MACARON_PRODUCT, price, -trade_volume))
-                    state.rt_position_update(state.rt_position - trade_volume)
-                    volume_needed -= trade_volume
-                    self.logger.print(f"Flatten Sell (Market): {-trade_volume}@{price}")
-                    if state.rt_position == target_position: break # Check if flat after order
-
-        # --- Conversions for Remainder ---
-        final_delta = target_position - state.rt_position # Check after market orders
-        if final_delta != 0:
-            conv_volume = min(abs(final_delta), MACARON_CONVERSION_LIMIT)
-            if final_delta > 0: # Need to buy via conversion
-                conversions_requested = conv_volume
-                self.logger.print(f"Flatten Buy (Conversion): {conv_volume}")
-            elif final_delta < 0: # Need to sell via conversion
-                conversions_requested = -conv_volume
-                self.logger.print(f"Flatten Sell (Conversion): {-conv_volume}")
-
-        return orders, conversions_requested
-
-    def _arbitrage_strategy(self, state: Status, pristine_buy_cost: float, pristine_sell_revenue: float, current_conversions: int) -> Tuple[List[Order], int]:
-        """Attempts arbitrage between local market and Pristine Cuisine."""
+    def _make_local_orders(self, state: Status, pristine_buy_cost: float, pristine_sell_revenue: float, edge: float) -> List[Order]:
+        """ Places resting MM orders based on implied levels and edge. """
         orders = []
-        used_conv = 0
-        remaining_conv_capacity = MACARON_CONVERSION_LIMIT - abs(current_conversions)
-        if remaining_conv_capacity <= 0:
-             return [], 0 # Cannot use conversions
 
-        # Opportunity: Buy Local, Sell Pristine (Requires Conversion Sell)
-        for ask_price, ask_volume in sorted(state.asks):
-            profit_margin = pristine_sell_revenue - ask_price
-            if profit_margin >= MACARON_ARB_PROFIT_MARGIN:
-                qty_can_buy_local = min(-ask_volume, state.possible_buy_amt)
-                qty_to_arb = min(qty_can_buy_local, remaining_conv_capacity)
+        # Target prices based on where we could convert
+        target_bid_price = int(round(pristine_sell_revenue - edge))
+        target_ask_price = int(round(pristine_buy_cost + edge))
 
-                if qty_to_arb > 0:
-                    orders.append(Order(MACARON_PRODUCT, ask_price, qty_to_arb))
-                    state.rt_position_update(state.rt_position + qty_to_arb)
-                    used_conv -= qty_to_arb # Negative conversion = Sell to Pristine
-                    remaining_conv_capacity -= qty_to_arb
-                    self.logger.print(f"Arb (Buy Local/Sell Pristine): {qty_to_arb}@{ask_price}, Req Conv Sell. Margin: {profit_margin:.2f}")
-                    if remaining_conv_capacity <= 0: break
-            else:
-                break # Prices are sorted asc, no more profit here
+        if target_bid_price >= target_ask_price: # Fallback if edge makes prices cross
+            mid_implied = (pristine_buy_cost + pristine_sell_revenue) / 2
+            target_bid_price = int(mid_implied - 1)
+            target_ask_price = int(mid_implied + 1)
 
-        # Opportunity: Buy Pristine, Sell Local (Requires Conversion Buy)
-        for bid_price, bid_volume in sorted(state.bids, reverse=True):
-            profit_margin = bid_price - pristine_buy_cost
-            if profit_margin >= MACARON_ARB_PROFIT_MARGIN:
-                qty_can_sell_local = min(bid_volume, state.possible_sell_amt)
-                qty_to_arb = min(qty_can_sell_local, remaining_conv_capacity)
+        # Basic pennying/adjustment based on existing best prices (optional)
+        # if state.bids and target_bid_price <= state.best_bid: target_bid_price = state.best_bid + 1
+        # if state.asks and target_ask_price >= state.best_ask: target_ask_price = state.best_ask - 1
 
-                if qty_to_arb > 0:
-                    orders.append(Order(MACARON_PRODUCT, bid_price, -qty_to_arb))
-                    state.rt_position_update(state.rt_position - qty_to_arb)
-                    used_conv += qty_to_arb # Positive conversion = Buy from Pristine
-                    remaining_conv_capacity -= qty_to_arb
-                    self.logger.print(f"Arb (Buy Pristine/Sell Local): {-qty_to_arb}@{bid_price}, Req Conv Buy. Margin: {profit_margin:.2f}")
-                    if remaining_conv_capacity <= 0: break
-            else:
-                break # Prices are sorted desc, no more profit here
-
-        return orders, used_conv
-
-
-    def _market_making_strategy(self, state: Status, fair_value: float, mode: str) -> List[Order]:
-        """Places passive buy and sell orders around the fair value."""
-        orders = []
-        spread = MACARON_DEFAULT_SPREAD
-
-        if mode == "PANIC":
-            spread *= 1.5 # Wider spread
-
-        # Inventory skew: widen spread on side we want less exposure, tighten on the other
-        inv_factor = state.rt_position / MACARON_POSITION_LIMIT # -1 to +1
-        buy_spread_adj = spread * max(0, inv_factor)    # Wider below FV if long
-        sell_spread_adj = spread * max(0, -inv_factor)  # Wider above FV if short
-
-        target_bid_price = int(round(fair_value - spread - buy_spread_adj))
-        target_ask_price = int(round(fair_value + spread + sell_spread_adj))
-
-        # Ensure bid < ask
-        if target_bid_price >= target_ask_price:
-            target_bid_price = int(fair_value - 1)
-            target_ask_price = int(fair_value + 1)
-
-        # Clip orders to be one tick inside best market prices if book exists
-        if state.bids:
-            target_bid_price = min(target_bid_price, state.best_bid)
-        if state.asks:
-            target_ask_price = max(target_ask_price, state.best_ask)
-            
-        # Prevent crossing the spread defined by existing best bid/ask
-        if state.asks and target_bid_price >= state.best_ask:
-             target_bid_price = state.best_ask -1
-        if state.bids and target_ask_price <= state.best_bid:
-             target_ask_price = state.best_bid + 1
-
-        # Place orders
-        bid_qty = min(MACARON_MM_ORDER_SIZE, state.possible_buy_amt)
+        # Place bid order
+        bid_qty = min(MACARON_MM_ORDER_SIZE, state.possible_buy_amt) # Uses rt_position already updated by takes
         if bid_qty > 0:
             orders.append(Order(MACARON_PRODUCT, target_bid_price, bid_qty))
-            # self.logger.print(f"MM Post Bid: {bid_qty}@{target_bid_price}")
+            # self.logger.print(f"Make Bid: {bid_qty}@{target_bid_price}")
 
-        ask_qty = min(MACARON_MM_ORDER_SIZE, state.possible_sell_amt)
+        # Place ask order
+        ask_qty = min(MACARON_MM_ORDER_SIZE, state.possible_sell_amt) # Uses rt_position updated by takes
         if ask_qty > 0:
             orders.append(Order(MACARON_PRODUCT, target_ask_price, -ask_qty))
-            # self.logger.print(f"MM Post Ask: {-ask_qty}@{target_ask_price}")
+            # self.logger.print(f"Make Ask: {-ask_qty}@{target_ask_price}")
 
         return orders
 
-    def _panic_mode_actions(self, state: Status, fair_value: float) -> List[Order]:
-        """ Additional actions specific to PANIC mode (e.g., chasing price moves). """
-        orders = []
-        # Example: If price significantly drops despite panic mode (counter-intuitive), maybe buy?
-        if state.best_ask < fair_value - 3.0: # Large deviation threshold
-             panic_buy_qty = min(state.possible_buy_amt, 5) # Small aggressive buy
-             if panic_buy_qty > 0:
-                 orders.append(Order(MACARON_PRODUCT, state.best_ask, panic_buy_qty))
-                 state.rt_position_update(state.rt_position + panic_buy_qty)
-                 self.logger.print(f"Panic Buy (Take Ask): {panic_buy_qty}@{state.best_ask}")
-        return orders
-
+    # --- Main Run Method ---
     def run(self, state: Status, timestamp: int) -> Tuple[List[Order], int]:
-        """Main execution logic for the Macaron strategy for one timestep."""
-        
+        """ Executes the Orchid-inspired strategy for Macarons. """
         all_orders: List[Order] = []
-        total_conversions_requested = 0
 
+        # 1. Get Observations
         obs = state._state.observations.conversionObservations.get(MACARON_PRODUCT)
         if not obs:
             self.logger.print(f"WARN ({timestamp}): No ConversionObservation for {MACARON_PRODUCT}")
-            return [], 0 # Cannot trade without observations
+            return [], 0
 
-        # 1. Update state (CSI)
+        # 2. Get Current State & Mode
+        current_position = state.position # Actual position at start of tick
         self._update_csi_state(obs.sunlightIndex)
         mode = self._get_trading_mode(timestamp)
-        # self.logger.print(f"Macaron ({timestamp}) Mode: {mode}, CSI_Ticks: {self.strategy_state.ticks_below_csi}, Pos: {state.position}, RT_Pos: {state.rt_position}")
+        # Set initial rt_position for this tick's logic
+        state.rt_position_update(current_position)
 
-        # 2. Handle Flattening Mode (Highest Priority)
-        if mode == "FLATTENING":
-            flatten_orders, flatten_conv = self._flatten_position(state, timestamp)
-            all_orders.extend(flatten_orders)
-            total_conversions_requested += flatten_conv
-            # In flattening mode, we generally don't do other strategies
-            return all_orders, total_conversions_requested
-
-        # 3. Calculate Key Values for Normal/Panic
-        pristine_buy_cost, pristine_sell_revenue = self._calculate_pristine_levels(obs, state.rt_position)
-        fair_value = self._calculate_fair_value(state, obs, mode)
-        # self.logger.print(f"Macaron ({timestamp}) FV: {fair_value:.2f}, PrisBuyC: {pristine_buy_cost:.2f}, PrisSellR: {pristine_sell_revenue:.2f}")
+        # 3. Request Conversion to Flatten
+        conversions_requested = self._request_conversion(current_position)
+        # Update rt_position to reflect the *intended* state after conversion for planning
+        state.rt_position_update(current_position + conversions_requested)
+        self.logger.print(f"Macaron ({timestamp}) Pos: {current_position}, ReqConv: {conversions_requested}, EstRTpos: {state.rt_position}")
 
 
-        # 4. Execute Strategies based on Mode (Normal / Panic)
+        # 4. Calculate Levels & Adaptive Edge
+        pristine_buy_cost, pristine_sell_revenue = self._calculate_pristine_levels(obs)
+        adaptive_edge = self._adapt_edge(current_position, timestamp, mode) # Adapt based on actual start position
+        self.logger.print(f"Mode: {mode}, Edge: {adaptive_edge:.2f}, ImpBuyC: {pristine_buy_cost:.2f}, ImpSellR: {pristine_sell_revenue:.2f}")
 
-        # 4a. Arbitrage (Local vs. Pristine)
-        arb_orders, arb_conv = self._arbitrage_strategy(state, pristine_buy_cost, pristine_sell_revenue, total_conversions_requested)
-        all_orders.extend(arb_orders)
-        total_conversions_requested += arb_conv
 
-        # 4b. Market Making (Passive Orders)
-        # Only MM if not too close to position limits to avoid accidental limit breaches
-        if abs(state.rt_position) < MACARON_POSITION_LIMIT * 0.9:
-             mm_orders = self._market_making_strategy(state, fair_value, mode)
-             all_orders.extend(mm_orders)
+        # 5. Take Logic: Aggressively trade if local price beats implied + scaled edge
+        # Pass the *updated* rt_position status object for limit checks
+        take_orders = self._take_local_orders(state, pristine_buy_cost, pristine_sell_revenue, adaptive_edge, MACARON_TAKE_EDGE_PROB_FACTOR)
+        all_orders.extend(take_orders)
+        # rt_position within 'state' object is now updated by take logic
+
+
+        # 6. Make Logic: Place resting orders around implied levels +/- edge
+        # Check limits against the potentially modified rt_position after takes
+        if "FLATTENING" not in mode: # Avoid placing new MM orders when trying to flatten urgently
+             make_orders = self._make_local_orders(state, pristine_buy_cost, pristine_sell_revenue, adaptive_edge)
+             all_orders.extend(make_orders)
         # else:
-             # self.logger.print(f"Macaron ({timestamp}): Skipping MM due to tight position limit ({state.rt_position})")
+             # self.logger.print(f"Skipping MM orders in mode: {mode}")
+
+        # 7. End of Round Safety Net (Optional - could be removed if confident in conversions)
+        # The continuous conversion *should* handle most flattening.
+        # This is a fallback using only Market Orders if near the end and still not flat.
+        # Check rt_position *after* takes/makes.
+        if mode == "FLATTENING_URGENT" and state.rt_position != 0:
+             self.logger.print(f"Urgent Flattening Safety Net: rt_pos = {state.rt_position}")
+             safety_orders = []
+             target_pos = 0
+             delta = target_pos - state.rt_position
+             if delta > 0: # Need to buy
+                 needed = delta
+                 for price, vol in sorted(state.asks):
+                     if needed <= 0: break
+                     qty = min(needed, -vol, state.possible_buy_amt)
+                     if qty > 0:
+                         safety_orders.append(Order(MACARON_PRODUCT, price, qty))
+                         state.rt_position_update(state.rt_position + qty) # Update internal
+                         needed -= qty
+                         self.logger.print(f"Urgent Flatten Buy: {qty}@{price}")
+             elif delta < 0: # Need to sell
+                  needed = -delta
+                  for price, vol in sorted(state.bids, reverse=True):
+                     if needed <= 0: break
+                     qty = min(needed, vol, state.possible_sell_amt)
+                     if qty > 0:
+                         safety_orders.append(Order(MACARON_PRODUCT, price, -qty))
+                         state.rt_position_update(state.rt_position - qty) # Update internal
+                         needed -= qty
+                         self.logger.print(f"Urgent Flatten Sell: {-qty}@{price}")
+             all_orders.extend(safety_orders)
 
 
-        # 4c. Panic Mode Specific Actions (Optional Aggression)
-        if mode == "PANIC":
-            panic_orders = self._panic_mode_actions(state, fair_value)
-            all_orders.extend(panic_orders)
+        return all_orders, conversions_requested
 
-        # 5. Final check on conversions limit (should be handled within arb logic mostly)
-        if abs(total_conversions_requested) > MACARON_CONVERSION_LIMIT:
-            self.logger.print(f"WARN ({timestamp}): Total conversion request {total_conversions_requested} exceeds limit. Capping.")
-            total_conversions_requested = MACARON_CONVERSION_LIMIT * np.sign(total_conversions_requested)
 
-        return all_orders, int(round(total_conversions_requested))
 
 
 class Strategy:
@@ -1561,10 +1522,7 @@ class Trader:
 
     def __init__(self):
         self.trader_data_cache = {} # Example cache for traderData decoding
-        # ... (Existing bandit state init if still used elsewhere) ...
-        self.offsets = list(range(-5, 2)) # Keep for bandit if used for other products
-        self.counts = {o: 1 for o in self.offsets}
-        self.rewards = {o: 0.0 for o in self.offsets}
+        
 
     
 
@@ -1615,10 +1573,19 @@ class Trader:
         if "CROISSANTS" not in result: result["CROISSANTS"] = []
         result["CROISSANTS"].extend(croissant_ema_orders)
 
-       ### MACARONS
-        macaron_orders, macaron_conv = self.macaron_strategy.run(self.state_macarons, state.timestamp)
-        result[MACARON_PRODUCT] = macaron_orders
-        conversions += macaron_conv
+        ### MACARONS
+        # --- Run NEW Macaron Strategy ---
+        total_conversions = 0
+        try:
+             macaron_orders, macaron_conv_req = self.macaron_strategy.run(self.state_macarons, state.timestamp)
+             result[MACARON_PRODUCT] = macaron_orders
+             total_conversions += macaron_conv_req
+        except Exception as e:
+             self.macaron_strategy.logger.print(f"ERROR in Macaron Strategy: {e}")
+             # Optionally print traceback:
+             # import traceback
+             # self.macaron_strategy.logger.print(traceback.format_exc())
+             result[MACARON_PRODUCT] = [] # Send no orders if error
 
         # --- New Volcanic Strategy (Round 3 Algorithm - Using List) ---
         volcanic_orders = {}
