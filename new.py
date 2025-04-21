@@ -1464,9 +1464,9 @@ class Trader:
     state_volcanic_rock = Status("VOLCANIC_ROCK")
     state_macarons = Status(MACARON_PRODUCT)
 
-    VOL_TRADE_SIZE = 100
-    VOL_POSITION_LIMIT_PER_STRIKE = 200 # Half of 200 total limit
-    VOL_UNDERLYING_POSITION_LIMIT = 300 # Limit for VOLCANIC_ROCK
+    VOL_TRADE_SIZE = 10
+    VOL_POSITION_LIMIT_PER_STRIKE = 100 
+    VOL_UNDERLYING_POSITION_LIMIT = 300
     HISTORICAL_MEAN_VOL = 8.5e-6
     VOL_DIFF_SELL_THRESHOLD = 2.5e-7
     VOL_DIFF_BUY_THRESHOLD  = -2.5e-7
@@ -1478,10 +1478,6 @@ class Trader:
 
     def __init__(self):
         self.trader_data_cache = {} # Example cache for traderData decoding
-        
-
-    
-
 
     def run(self, state: TradingState) -> tuple[dict[Symbol, list[Order]], int, str]:
         Status.cls_update(state)
@@ -1508,13 +1504,11 @@ class Trader:
         
         self.macaron_strategy.update_state_from_traderdata(traderData)
 
-        # --- Existing Strategies (Rounds 1, 2, Macarons) ---
-        # (Keep your existing logic here)
         result["RAINFOREST_RESIN"] = Trade.resin(self.state_resin)
         result["KELP"] = Trade.kelp(self.state_kelp)
         result["SQUID_INK"] = Trade.ema_mean_reversion(self.state_squink)
         result["PICNIC_BASKET1"] = Trade.basket_1(self.state_picnic1, self.state_jam, self.state_djembes, self.state_croiss)
-        result["JAMS"] = Trade.jams(self.state_jam)
+        # result["JAMS"] = Trade.jams(self.state_jam)
         result["PICNIC_BASKET2"] = Trade.basket_2(self.state_picnic2, self.state_jam, self.state_djembes, self.state_croiss)
         pair_orders = Trade.djmb_crs_pair(self.state_djembes, self.state_croiss)
         if "DJEMBES" not in result: result["DJEMBES"] = []
