@@ -1474,186 +1474,294 @@ class Trader:
 
     
 
+
     def run(self, state: TradingState) -> tuple[dict[Symbol, list[Order]], int, str]:
-        # --- Preliminaries ---
         Status.cls_update(state)
         round_number = 5
         current_timestamp = state.timestamp
-        result: dict[Symbol, list[Order]] = {}
+        result = {}
         conversions = 0
 
-        # --- Decode and prepare traderData ---
-        traderData: Dict[str, Any] = {}
+        # Decode traderData
+        traderData = {}
         if state.traderData:
             try:
                 traderData = jsonpickle.decode(state.traderData)
-                # Ensure history is list
+                # Ensure vol_c_t_history is a list (might be loaded from old format)
                 if 'vol_c_t_history' in traderData and not isinstance(traderData['vol_c_t_history'], list):
-                    traderData['vol_c_t_history'] = list(traderData['vol_c_t_history'])
-            except Exception:
-                traderData = {}
-        if 'vol_c_t_history' not in traderData:
-            traderData['vol_c_t_history'] = []
+                     traderData['vol_c_t_history'] = list(traderData['vol_c_t_history'])
 
-        # --- Load Macaron state ---
+            except Exception as e:
+                traderData = {}
+
+        # Initialize rolling c_t history as a list if not present
+        if 'vol_c_t_history' not in traderData:
+            traderData['vol_c_t_history'] = [] # Use a standard list
+        
         self.macaron_strategy.update_state_from_traderdata(traderData)
 
-        # --- Round 1 & 2 & pair logic ---
+        # --- Existing Strategies (Rounds 1, 2, Macarons) ---
+        # (Keep your existing logic here)
         result["RAINFOREST_RESIN"] = Trade.resin(self.state_resin)
         result["KELP"] = Trade.kelp(self.state_kelp)
         result["SQUID_INK"] = Trade.ema_mean_reversion(self.state_squink)
-        result["PICNIC_BASKET1"] = Trade.basket_1(
-            self.state_picnic1, self.state_jam, self.state_djembes, self.state_croiss
-        )
+        result["PICNIC_BASKET1"] = Trade.basket_1(self.state_picnic1, self.state_jam, self.state_djembes, self.state_croiss)
         result["JAMS"] = Trade.jams(self.state_jam)
-        result["PICNIC_BASKET2"] = Trade.basket_2(
-            self.state_picnic2, self.state_jam, self.state_djembes, self.state_croiss
-        )
-        # DJEMBES-CROISSANTS pair trades
+        result["PICNIC_BASKET2"] = Trade.basket_2(self.state_picnic2, self.state_jam, self.state_djembes, self.state_croiss)
         pair_orders = Trade.djmb_crs_pair(self.state_djembes, self.state_croiss)
-        result.setdefault("DJEMBES", [])
-        result.setdefault("CROISSANTS", [])
-        for o in pair_orders:
-            if o.symbol == "DJEMBES":
-                result["DJEMBES"].append(o)
-            elif o.symbol == "CROISSANTS":
-                result["CROISSANTS"].append(o)
-        # CROISSANT EMA
-        cro_ema = Trade.croissant_ema(state)
-        result["CROISSANTS"].extend(cro_ema)
+        if "DJEMBES" not in result: result["DJEMBES"] = []
+        if "CROISSANTS" not in result: result["CROISSANTS"] = []
+        for order in pair_orders:
+            if order.symbol == "DJEMBES":
+                result["DJEMBES"].append(order)
+            elif order.symbol == "CROISSANTS":
+                result["CROISSANTS"].append(order)
 
-        # --- Macaron Strategy (Round 4) ---
+        croissant_ema_orders = Trade.croissant_ema(state)
+        if "CROISSANTS" not in result: result["CROISSANTS"] = []
+        result["CROISSANTS"].extend(croissant_ema_orders)
+
+        ### MACARONS
+        # --- Run NEW Macaron Strategy ---
+        total_conversions = 0
         try:
-            mac_orders, mac_conv = self.macaron_strategy.run(
-                self.state_macarons, current_timestamp
-            )
-            result[MACARON_PRODUCT] = mac_orders
-            conversions += mac_conv
+             macaron_orders, macaron_conv_req = self.macaron_strategy.run(self.state_macarons, state.timestamp)
+             result[MACARON_PRODUCT] = macaron_orders
+             total_conversions += macaron_conv_req
         except Exception as e:
-            self.macaron_strategy.logger.print(f"ERROR in Macaron run: {e}")
-            result[MACARON_PRODUCT] = []
+             self.macaron_strategy.logger.print(f"ERROR in Macaron Strategy: {e}")
+             # Optionally print traceback:
+             # import traceback
+             # self.macaron_strategy.logger.print(traceback.format_exc())
+             result[MACARON_PRODUCT] = [] # Send no orders if error
 
-        # --- Volcanic Strategy (Round 3 Algorithm) ---
-        volcanic_orders: Dict[Symbol, list[Order]] = {}
-        # Setup voucher symbols and states
+        # --- New Volcanic Strategy (Round 3 Algorithm - Using List) ---
+        volcanic_orders = {}
+
+        # Setup: voucher_symbols, strikes, voucher_states, underlying_state
         voucher_symbols = [
             "VOLCANIC_ROCK_VOUCHER_9500", "VOLCANIC_ROCK_VOUCHER_9750",
             "VOLCANIC_ROCK_VOUCHER_10000", "VOLCANIC_ROCK_VOUCHER_10250",
             "VOLCANIC_ROCK_VOUCHER_10500"
         ]
-        strikes = {sym: int(sym.split('_')[-1]) for sym in voucher_symbols}
+        strikes = {symbol: int(symbol.split('_')[-1]) for symbol in voucher_symbols}
         try:
             voucher_states = {sym: getattr(self, f"state_voucher_{strikes[sym]}") for sym in voucher_symbols}
-            underlying = self.state_volcanic_rock
+            underlying_state = self.state_volcanic_rock
         except AttributeError as e:
-            logger.print(f"CRITICAL ERROR: Missing volcanic state: {e}")
-            final_data = jsonpickle.encode(traderData)
-            logger.flush(state, result, conversions, final_data)
-            return result, conversions, final_data
+             logger.print(f"CRITICAL ERROR: Missing volcanic state attribute: {e}")
+             final_trader_data = jsonpickle.encode(traderData) # Encode before returning
+             logger.flush(state, result, conversions, final_trader_data)
+             return result, conversions, final_trader_data
 
-        # Inputs: spot, TTE
+        # 1. Get Inputs (S_t, TTE_t)
         try:
-            spot = underlying.mid
+            spot_price = underlying_state.mid
             TTE = compute_time_to_expiry(round_number, current_timestamp)
             r = 0.0
-            logger.print(f"Volcanic Inputs: S_t={spot:.2f}, TTE={TTE:.6f}")
+            logger.print(f"Volcanic Inputs: S_t={spot_price:.2f}, TTE={TTE:.6f} years")
+
+            # Liquidation Check
             if TTE < self.VOL_LIQUIDATION_TTE_DAYS:
-                # Liquidate all
-                for sym in voucher_symbols:
-                    pos = voucher_states[sym].position
-                    if pos:
-                        price = voucher_states[sym].best_bid if pos > 0 else voucher_states[sym].best_ask
+                 logger.print(f"CRITICAL: TTE ({TTE*365.25:.2f} days) < {self.VOL_LIQUIDATION_TTE_DAYS*365.25:.1f} day(s). Liquidating ALL Volcanic positions.")
+                 # ... (Liquidation logic - unchanged) ...
+                 for symbol in voucher_symbols:
+                    pos = voucher_states[symbol].position
+                    if pos != 0:
+                        price = voucher_states[symbol].best_bid if pos > 0 else voucher_states[symbol].best_ask
                         if price is not None:
-                            volcanic_orders.setdefault(sym, []).append(Order(sym, int(price), -pos))
-                rock_pos = underlying.position
-                if rock_pos:
-                    price = underlying.best_bid if rock_pos > 0 else underlying.best_ask
+                            if symbol not in volcanic_orders: volcanic_orders[symbol] = []
+                            volcanic_orders[symbol].append(Order(symbol, int(price), -pos))
+                 rock_pos = underlying_state.position
+                 if rock_pos != 0:
+                    price = underlying_state.best_bid if rock_pos > 0 else underlying_state.best_ask
                     if price is not None:
-                        volcanic_orders.setdefault("VOLCANIC_ROCK", []).append(Order("VOLCANIC_ROCK", int(price), -rock_pos))
-                final_data = jsonpickle.encode(traderData)
-                for sym, ords in volcanic_orders.items():
-                    result.setdefault(sym, []).extend(ords)
-                logger.flush(state, result, conversions, final_data)
-                return result, conversions, final_data
-            if spot <= 0 or TTE <= 1e-9:
-                raise ValueError("Invalid spot or TTE")
+                        if "VOLCANIC_ROCK" not in volcanic_orders: volcanic_orders["VOLCANIC_ROCK"] = []
+                        volcanic_orders["VOLCANIC_ROCK"].append(Order("VOLCANIC_ROCK", int(price), -rock_pos))
+
+                 final_trader_data = jsonpickle.encode(traderData)
+                 for sym, orders in volcanic_orders.items():
+                      if sym not in result: result[sym] = []
+                      result[sym].extend(orders)
+                 logger.flush(state, result, conversions, final_trader_data)
+                 return result, conversions, final_trader_data
+            # --- End Liquidation Check ---
+
+            if spot_price <= 0: raise ValueError("Underlying spot price is non-positive.")
+            if TTE <= 1e-9: raise ValueError(f"Time to expiry too small: {TTE}")
+
         except Exception as e:
-            logger.print(f"Volcanic input error: {e}")
-            final_data = jsonpickle.encode(traderData)
-            logger.flush(state, result, conversions, final_data)
-            return result, conversions, final_data
+            logger.print(f"Error getting Volcanic inputs or TTE: {e}. Skipping Volcanic strategy this tick.")
+            final_trader_data = jsonpickle.encode(traderData)
+            logger.flush(state, result, conversions, final_trader_data)
+            return result, conversions, final_trader_data
 
-        # IV & moneyness
-        pairs = []
-        sqrtT = np.sqrt(TTE)
-        for sym in voucher_symbols:
-            st = voucher_states[sym]
-            K = strikes[sym]
-            price = st.mid
-            if price and price > 0:
-                try:
-                    iv = implied_volatility(price, spot, K, round_number, current_timestamp, r)
-                    if iv and iv > 1e-6:
-                        m = np.log(K/spot)/sqrtT
-                        pairs.append((m, iv))
-                except Exception as ex:
-                    logger.print(f"IV error {sym}: {ex}")
-        # Fit
-        valid = [(m, v) for m, v in pairs if not np.isnan(m) and not np.isnan(v)]
-        logger.print(f"Fit pts: {len(valid)}")
-        if len(valid) >= 3:
-            ms = np.array([x[0] for x in valid])
-            vs = np.array([x[1] for x in valid])
-            coeffs = np.polyfit(ms, vs, 2)
-            c_t = coeffs[2]
+        # 2. Calculate IVs, Moneyness
+        moneyness_vol_pairs = []
+        sqrt_TTE = math.sqrt(TTE)
+
+        for symbol in voucher_symbols:
+            voucher_state = voucher_states[symbol]
+            K = strikes[symbol]
+            iv = np.nan
+            moneyness = np.nan
+            try:
+                voucher_price = voucher_state.mid
+                if voucher_price is None or voucher_price <= 0: continue
+
+                # Calculate IV (use the function assumed to be defined elsewhere)
+                iv = implied_volatility(voucher_price, spot_price, K, round_number, current_timestamp, r, tol=1e-4, max_iter=1000)
+                # logger.print(f"Raw IV for {symbol}: {iv}") # Keep for debugging if needed
+
+                if not np.isnan(iv) and iv > 1e-6:
+                     # Calculate Moneyness
+                     if K > 0 and spot_price > 0:
+                         log_arg = K / spot_price
+                         if log_arg > 0:
+                             moneyness = math.log(log_arg) / sqrt_TTE
+                         else: moneyness = np.nan
+                     else: moneyness = np.nan
+
+                     if not np.isnan(moneyness):
+                         moneyness_vol_pairs.append((moneyness, iv))
+                     # else: logger.print(f"Skipping pair for {symbol}: Moneyness failed")
+                # else: logger.print(f"Skipping pair for {symbol}: IV failed")
+
+            except Exception as e:
+                logger.print(f"Error processing voucher {symbol} in IV/Moneyness loop: {type(e).__name__} - {e!r}")
+
+
+        # 3. Fit Curve and Get c_t
+        filtered_pairs = [(m, v) for m, v in moneyness_vol_pairs if not np.isnan(m) and not np.isnan(v)]
+        valid_points_count = len(filtered_pairs)
+        logger.print(f"Found {valid_points_count} valid & non-NaN pairs for fitting.")
+
+        c_t = np.nan
+        coeffs = None
+
+        if valid_points_count >= 3:
+            try:
+                m_values = np.array([p[0] for p in filtered_pairs])
+                sigma_values = np.array([p[1] for p in filtered_pairs])
+                coeffs = np.polyfit(m_values, sigma_values, 2)
+                c_t = coeffs[2] # Base implied volatility (at m=0)
+                logger.print(f"Quadratic Fit ({valid_points_count} pts): c_t={c_t:.4f}")
+            except Exception as e:
+                logger.print(f"Error fitting quadratic curve ({valid_points_count} pts): {e}")
+                c_t = np.nan
         else:
+            logger.print(f"Skipping quadratic fit: Only {valid_points_count} valid points found.")
             c_t = np.nan
-        logger.print(f"c_t: {c_t}")
 
-        # Compare to historical
+        logger.print(f"Final c_t value for tick {state.timestamp}: {c_t}")
+
+        # 4. Compare c_t to Historical Mean (No rolling window or Z-score)
+        vol_diff = np.nan
         if not np.isnan(c_t):
             vol_diff = c_t - self.HISTORICAL_MEAN_VOL
+            logger.print(f"Vol Comparison: c_t={c_t:.4f}, HistMean={self.HISTORICAL_MEAN_VOL:.4f} -> Diff={vol_diff:.4f}")
         else:
-            vol_diff = np.nan
+            logger.print("Skipping vol comparison: c_t is NaN.")
 
-        # ATM select
-        atm = None
-        minm = float('inf')
-        for sym in voucher_symbols:
-            K = strikes[sym]
-            if spot>0 and TTE>1e-9:
-                m = np.log(K/spot)/sqrtT
-                if abs(m)<minm:
-                    minm = abs(m); atm = sym
-        # Signal
-        if atm and not np.isnan(vol_diff):
-            st = voucher_states[atm]; pos = st.position
-            if vol_diff < self.VOL_DIFF_BUY_THRESHOLD and pos<self.VOL_POSITION_LIMIT_PER_STRIKE:
-                q = min(self.VOL_TRADE_SIZE, self.VOL_POSITION_LIMIT_PER_STRIKE-pos, st.possible_buy_amt)
-                if q and st.best_ask:
-                    volcanic_orders.setdefault(atm, []).append(Order(atm, int(st.best_ask), q))
-            elif vol_diff > self.VOL_DIFF_SELL_THRESHOLD and pos>-self.VOL_POSITION_LIMIT_PER_STRIKE:
-                q = min(self.VOL_TRADE_SIZE, self.VOL_POSITION_LIMIT_PER_STRIKE+pos, st.possible_sell_amt)
-                if q and st.best_bid:
-                    volcanic_orders.setdefault(atm, []).append(Order(atm, int(st.best_bid), -q))
-            elif abs(vol_diff)<self.VOL_DIFF_CLOSE_THRESHOLD and pos!=0:
-                price = st.best_bid if pos>0 else st.best_ask
-                q = -pos
-                volcanic_orders.setdefault(atm, []).append(Order(atm, int(price), q))
 
-        # Merge volcanic
-        for sym, ords in volcanic_orders.items():
-            result.setdefault(sym, []).extend(ords)
+        # 5. Choose ATM Strike (C_ATM)
+        atm_symbol = None
+        min_abs_moneyness = float('inf')
+        # Re-calculate moneyness for all strikes just for ATM selection
+        for symbol in voucher_symbols:
+             K = strikes[symbol]
+             if K <= 0 or spot_price <= 0 or TTE <= 1e-9: continue
+             try:
+                 log_arg = K / spot_price
+                 if log_arg <= 0: continue
+                 moneyness = math.log(log_arg) / sqrt_TTE
+                 if abs(moneyness) < min_abs_moneyness:
+                      min_abs_moneyness = abs(moneyness)
+                      atm_symbol = symbol
+             except Exception as e:
+                 logger.print(f"Error calculating moneyness for ATM selection ({symbol}): {e}")
 
-        logger.print("--- Finished Volcanic ---")
+        if atm_symbol:
+             logger.print(f"ATM Strike Selected: {atm_symbol} (|m|={min_abs_moneyness:.4f})")
+        else:
+             logger.print("Could not determine ATM strike.")
 
-        # --- Finalize ---
+
+        # 6. Trading Signal (based on vol_diff and ATM option)
+        if atm_symbol and not np.isnan(vol_diff):
+            atm_state = voucher_states[atm_symbol]
+            atm_position = atm_state.position
+
+            # Buy Signal (Current Vol Too Low)
+            if vol_diff < self.VOL_DIFF_BUY_THRESHOLD:
+                if atm_position < self.VOL_POSITION_LIMIT_PER_STRIKE:
+                    qty_to_buy = min(self.VOL_TRADE_SIZE, self.VOL_POSITION_LIMIT_PER_STRIKE - atm_position, atm_state.possible_buy_amt)
+                    if qty_to_buy > 0:
+                        price = atm_state.best_ask
+                        if price is not None:
+                            order = Order(atm_symbol, int(price), qty_to_buy)
+                            if atm_symbol not in volcanic_orders: volcanic_orders[atm_symbol] = []
+                            volcanic_orders[atm_symbol].append(order)
+                            logger.print(f"TRADE SIGNAL (BUY): {atm_symbol} {qty_to_buy} @ {price} (VolDiff={vol_diff:.4f})")
+                        else: logger.print(f"Cannot place BUY for {atm_symbol}: No asks.")
+                # else: logger.print(f"BUY Signal for {atm_symbol} blocked: At LONG limit")
+
+            # Sell Signal (Current Vol Too High)
+            elif vol_diff > self.VOL_DIFF_SELL_THRESHOLD:
+                if atm_position > -self.VOL_POSITION_LIMIT_PER_STRIKE:
+                    qty_to_sell = min(self.VOL_TRADE_SIZE, self.VOL_POSITION_LIMIT_PER_STRIKE + atm_position, atm_state.possible_sell_amt)
+                    if qty_to_sell > 0:
+                        price = atm_state.best_bid
+                        if price is not None:
+                            order = Order(atm_symbol, int(price), -qty_to_sell)
+                            if atm_symbol not in volcanic_orders: volcanic_orders[atm_symbol] = []
+                            volcanic_orders[atm_symbol].append(order)
+                            logger.print(f"TRADE SIGNAL (SELL): {atm_symbol} {-qty_to_sell} @ {price} (VolDiff={vol_diff:.4f})")
+                        else: logger.print(f"Cannot place SELL for {atm_symbol}: No bids.")
+                # else: logger.print(f"SELL Signal for {atm_symbol} blocked: At SHORT limit")
+
+            # Close Signal (Current Vol Near Historical Mean)
+            elif abs(vol_diff) < self.VOL_DIFF_CLOSE_THRESHOLD:
+                if atm_position != 0:
+                    qty_to_close = -atm_position
+                    price = atm_state.best_bid if atm_position > 0 else atm_state.best_ask
+                    possible_trade_qty = atm_state.possible_sell_amt if atm_position > 0 else atm_state.possible_buy_amt
+                    if abs(qty_to_close) <= possible_trade_qty:
+                         if price is not None:
+                             order = Order(atm_symbol, int(price), qty_to_close)
+                             if atm_symbol not in volcanic_orders: volcanic_orders[atm_symbol] = []
+                             volcanic_orders[atm_symbol].append(order)
+                             logger.print(f"TRADE SIGNAL (CLOSE): {atm_symbol} {qty_to_close} @ {price} (|VolDiff|={abs(vol_diff):.4f})")
+                         else: logger.print(f"Cannot place CLOSE for {atm_symbol}: No bid/ask.")
+                    # else: logger.print(f"CLOSE Signal for {atm_symbol} blocked: Cannot trade quantity")
+                # else: logger.print(f"CLOSE Signal: No position in {atm_symbol} to close.")
+            # else: logger.print(f"No trade signal for {atm_symbol}: VolDiff {vol_diff:.4f} within deadzone.")
+
+        elif not atm_symbol:
+            logger.print("No trade signal: ATM symbol not determined.")
+        elif np.isnan(vol_diff):
+             logger.print("No trade signal: vol_diff is NaN (likely c_t was NaN).")
+
+
+        # 7. Delta Hedging (Skipped)
+
+        # 8. Risk Constraints Check (Limits checked above)
+
+        # --- Merge Volcanic Orders ---
+        for symbol, orders in volcanic_orders.items():
+             if symbol not in result: result[symbol] = []
+             result[symbol].extend(orders)
+
+        logger.print("--- Finished Volcanic Strategy ---")
+
+        # --- Final Steps ---
         self.macaron_strategy.save_state_to_traderdata(traderData)
+        final_trader_data = ""
         try:
-            final_data = jsonpickle.encode(traderData)
+            # Encode traderData (without vol_c_t_history)
+            final_trader_data = jsonpickle.encode(traderData)
         except Exception as e:
-            final_data = ""
-            self.macaron_strategy.logger.print(f"Encode error: {e}")
+            logger.print(f"Error encoding traderData: {e}")
 
-        logger.flush(state, result, conversions, final_data)
-        return result, conversions, final_data
+        logger.flush(state, result, int(round(conversions)), final_trader_data)
+        return result, int(round(conversions)), final_trader_data
