@@ -856,272 +856,220 @@ class Status:
         
 
 # --- State Persistence ---
-class MacaronStrategyState:
-    def __init__(self):
-        self.ticks_below_csi = 0
-        self.current_edge = MACARON_DEFAULT_SPREAD
-        self.position_history = [] # Stores actual positions from previous ticks
+# --- Product Constant ---
+MACARON_PRODUCT = "MAGNIFICENT_MACARONS"
 
-    def to_dict(self):
+# --- Mode Constants ---
+MODE_NORMAL = "NORMAL"
+MODE_PANIC = "PANIC"
+MODE_FLATTEN = "FLATTENING_NORMAL"
+MODE_URGENT = "FLATTENING_URGENT"
+
+# --- Configuration ---
+class MacaronConfig:
+    def __init__(self):
+        self.CSI_THRESHOLD = 35.0
+        self.CSI_SUSTAINED_TICKS = 20
+        self.ADAPT_EDGE_STEP = 0.1
+        self.ADAPT_MIN_EDGE = 0.5
+        self.ADAPT_MAX_EDGE = 4.0
+        self.ADAPT_POS_HIST_LEN = 5
+        self.ADAPT_VOL_THRESH_UP = 5.0
+        self.ADAPT_VOL_THRESH_DOWN = 1.0
+        self.ADAPT_POS_THRESH_DOWN = 1
+        self.DEFAULT_SPREAD = 1.5
+        self.TAKE_EDGE_PROB_FACTOR = 0.5
+        self.MM_ORDER_SIZE = 10
+        self.CONVERSION_LIMIT = 10
+        self.POSITION_LIMIT = 75
+        self.FLATTEN_TS = 99000
+        self.URGENT_TS = 99500
+        self.STORAGE_COST_PER_TICK = 0.001  # 0.1 per 100 ticks
+
+class MacaronStrategyState:
+    def __init__(self, cfg: MacaronConfig):
+        self.cfg = cfg
+        self.ticks_below_csi = 0
+        self.current_edge = cfg.DEFAULT_SPREAD
+        self.position_history: List[int] = []
+
+    def to_dict(self) -> Dict[str, Any]:
         return {
-            "ticks_below_csi": self.ticks_below_csi,
-            "current_edge": self.current_edge,
-            "position_history": list(self.position_history) # Ensure serializable list
+            'ticks_below_csi': self.ticks_below_csi,
+            'current_edge': self.current_edge,
+            'position_history': list(self.position_history)
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]):
-        instance = cls()
-        instance.ticks_below_csi = data.get("ticks_below_csi", 0)
-        instance.current_edge = data.get("current_edge", MACARON_DEFAULT_SPREAD)
-        # Ensure history is loaded as a list
-        loaded_history = data.get("position_history", [])
-        instance.position_history = list(loaded_history) if isinstance(loaded_history, (list, np.ndarray)) else []
+    def from_dict(cls, data: Dict[str, Any], cfg: MacaronConfig) -> 'MacaronStrategyState':
+        inst = cls(cfg)
+        inst.ticks_below_csi = data.get('ticks_below_csi', 0)
+        inst.current_edge = data.get('current_edge', cfg.DEFAULT_SPREAD)
+        hist = data.get('position_history', [])
+        inst.position_history = list(hist)[-cfg.ADAPT_POS_HIST_LEN:]
+        return inst
 
-        # Limit history length on load just in case
-        hist_len = MACARON_ADAPT_POS_HIST_LEN
-        if len(instance.position_history) > hist_len:
-             instance.position_history = instance.position_history[-hist_len:]
-        return instance
-
-# --- Strategy Class ---
 class MacaronStrategy:
-    def __init__(self, logger_instance):
-        self.logger = logger_instance
-        self.strategy_state = MacaronStrategyState()
+    def __init__(self, logger: Any):
+        self.logger = logger
+        self.cfg = MacaronConfig()
+        self.state = MacaronStrategyState(self.cfg)
 
-    # --- State Management (load/save/update_csi - keep as before) ---
+    # --- Persistence ---
     def update_state_from_traderdata(self, traderData: Dict[str, Any]):
         if MACARON_PRODUCT in traderData:
-            self.strategy_state = MacaronStrategyState.from_dict(traderData[MACARON_PRODUCT])
+            self.state = MacaronStrategyState.from_dict(traderData[MACARON_PRODUCT], self.cfg)
         else:
-            self.strategy_state = MacaronStrategyState()
+            self.state = MacaronStrategyState(self.cfg)
 
     def save_state_to_traderdata(self, traderData: Dict[str, Any]):
-        traderData[MACARON_PRODUCT] = self.strategy_state.to_dict()
+        traderData[MACARON_PRODUCT] = self.state.to_dict()
 
-    def _update_csi_state(self, sunlight_index: float):
-        if sunlight_index < MACARON_CSI_THRESHOLD:
-            self.strategy_state.ticks_below_csi += 1
+    # --- CSI Update ---
+    def _update_csi(self, sunlight_index: float):
+        if sunlight_index < self.cfg.CSI_THRESHOLD:
+            self.state.ticks_below_csi += 1
         else:
-            self.strategy_state.ticks_below_csi = 0
+            self.state.ticks_below_csi = 0
 
-    def _get_trading_mode(self, timestamp: int) -> str:
-        # Keep modes, might be used to influence edge adaptation or aggression
-        # Flattening mode is less critical now but can be a fallback
-        if timestamp >= 995000: # Make flattening more urgent later?
-             return "FLATTENING_URGENT"
-        elif timestamp >= 990000:
-             return "FLATTENING_NORMAL"
-        elif self.strategy_state.ticks_below_csi >= MACARON_CSI_SUSTAINED_TICKS:
-            return "PANIC"
-        else:
-            return "NORMAL"
-    
-     # --- Core Logic ---
+    # --- Mode Computation ---
+    def _compute_mode(self, timestamp: int) -> str:
+        if timestamp >= self.cfg.URGENT_TS:
+            return MODE_URGENT
+        if timestamp >= self.cfg.FLATTEN_TS:
+            return MODE_FLATTEN
+        if self.state.ticks_below_csi >= self.cfg.CSI_SUSTAINED_TICKS:
+            return MODE_PANIC
+        return MODE_NORMAL
 
-    def _calculate_pristine_levels(self, obs: ConversionObservation) -> Tuple[float, float]:
-        """Calculates the raw cost to buy from / sell revenue to Pristine."""
-        # Simplified: Raw levels, edge will account for desired profit/risk.
-        # Storage cost (0.1 per 100 timestamps) is minor per tick (0.001)
-        # compared to fees/tariffs, ignore for baseline levels.
-        pristine_buy_cost = obs.askPrice + obs.transportFees + obs.importTariff
-        pristine_sell_revenue = obs.bidPrice - obs.transportFees - obs.exportTariff
-        return pristine_buy_cost, pristine_sell_revenue
+    # --- Pristine Level Calculation ---
+    def _calculate_pristine_levels(self, obs: Any) -> Tuple[float, float]:
+        buy_cost = obs.askPrice + obs.transportFees + obs.importTariff
+        sell_rev = obs.bidPrice - obs.transportFees - obs.exportTariff
+        return buy_cost, sell_rev
 
-    def _adapt_edge(self, current_position: int, timestamp: int, mode: str) -> float:
-        """ Adapts the trading edge based on recent position volatility and current mode. """
-        # Use actual position from start of tick for history
-        self.strategy_state.position_history.append(current_position)
-        if len(self.strategy_state.position_history) > MACARON_ADAPT_POS_HIST_LEN:
-            self.strategy_state.position_history.pop(0)
+    # --- Edge Adaptation ---
+    def _adapt_edge(self, position: int, mode: str) -> float:
+        hist = self.state.position_history
+        hist.append(position)
+        if len(hist) > self.cfg.ADAPT_POS_HIST_LEN:
+            hist.pop(0)
+        if len(hist) < self.cfg.ADAPT_POS_HIST_LEN:
+            return self.state.current_edge
 
-        if len(self.strategy_state.position_history) < MACARON_ADAPT_POS_HIST_LEN or timestamp < 1000: # Allow warmup
-            return self.strategy_state.current_edge # Not enough data or too early
+        vol = np.std(hist)
+        edge = self.state.current_edge
+        if vol > self.cfg.ADAPT_VOL_THRESH_UP:
+            edge = min(self.cfg.ADAPT_MAX_EDGE, edge + self.cfg.ADAPT_EDGE_STEP)
+            self.logger.print(f"Edge INC to {edge:.2f}")
+        elif vol < self.cfg.ADAPT_VOL_THRESH_DOWN and abs(position) < self.cfg.ADAPT_POS_THRESH_DOWN:
+            edge = max(self.cfg.ADAPT_MIN_EDGE, edge - self.cfg.ADAPT_EDGE_STEP)
+            self.logger.print(f"Edge DEC to {edge:.2f}")
 
-        pos_std_dev = np.std(self.strategy_state.position_history)
-        current_edge = self.strategy_state.current_edge
-        edge_changed = False
+        if mode == MODE_PANIC:
+            edge = max(edge, self.cfg.DEFAULT_SPREAD * 1.2)
 
-        # Increase edge if volatile
-        if pos_std_dev > MACARON_ADAPT_VOL_THRESH_UP:
-            current_edge = min(MACARON_ADAPT_MAX_EDGE, current_edge + MACARON_ADAPT_EDGE_STEP)
-            self.logger.print(f"Edge INC to {current_edge:.2f} (Vol: {pos_std_dev:.2f})")
-            edge_changed = True
-        # Decrease edge if stable near zero
-        elif pos_std_dev < MACARON_ADAPT_VOL_THRESH_DOWN and abs(current_position) < MACARON_ADAPT_POS_THRESH_DOWN:
-            current_edge = max(MACARON_ADAPT_MIN_EDGE, current_edge - MACARON_ADAPT_EDGE_STEP)
-            self.logger.print(f"Edge DEC to {current_edge:.2f} (Vol: {pos_std_dev:.2f}, Pos: {current_position})")
-            edge_changed = True
+        self.state.current_edge = edge
+        return edge
 
-        # Mode adjustments (optional)
-        if mode == "PANIC":
-             # Ensure edge doesn't get too tight in panic
-             current_edge = max(current_edge, MACARON_DEFAULT_SPREAD * 1.2) # e.g., 120% of default
-        elif "FLATTENING" in mode:
-             # Maybe slightly tighten edge to encourage fills for flattening? Or rely on take logic?
-             pass # For now, rely on take logic / conversion
-
-        if edge_changed:
-            self.strategy_state.position_history = [] # Reset history after change
-
-        self.strategy_state.current_edge = current_edge
-        return current_edge
-
-    def _request_conversion(self, current_position: int) -> int:
-        """ Determines the conversion amount to request to flatten position. """
-        if current_position == 0:
+    # --- Conversion Request ---
+    def _request_conversion(self, position: int) -> int:
+        if position == 0:
             return 0
-        conversion_amount = -current_position
-        clipped_conversion = max(-MACARON_CONVERSION_LIMIT, min(MACARON_CONVERSION_LIMIT, conversion_amount))
-        return clipped_conversion
+        return max(-self.cfg.CONVERSION_LIMIT,
+                   min(self.cfg.CONVERSION_LIMIT, -position))
 
-    def _take_local_orders(self, state: Status, pristine_buy_cost: float, pristine_sell_revenue: float, edge: float, prob_factor: float) -> List[Order]:
-        """ Takes aggressive orders if local price beats implied + scaled edge. """
-        orders = []
-        effective_take_edge = edge * prob_factor
-
-        # Buy Takes: Local Ask < Implied Sell Revenue - Effective Edge
-        buy_threshold = pristine_sell_revenue - effective_take_edge
-        sorted_asks = sorted(state.asks)
-        for price, available_volume in sorted_asks:
-             if price < buy_threshold:
-                 qty_to_buy = min(-available_volume, state.possible_buy_amt) # Respect available + limit
-                 if qty_to_buy > 0:
-                     orders.append(Order(MACARON_PRODUCT, price, qty_to_buy))
-                     state.rt_position_update(state.rt_position + qty_to_buy) # Update internal tracker
-                     self.logger.print(f"Take Buy: {qty_to_buy}@{price} (Threshold < {buy_threshold:.2f})")
-                     if state.rt_position == MACARON_POSITION_LIMIT: break # Stop if limit hit
-             else:
-                 break # Prices sorted ascending
-
-        # Sell Takes: Local Bid > Implied Buy Cost + Effective Edge
-        sell_threshold = pristine_buy_cost + effective_take_edge
-        sorted_bids = sorted(state.bids, reverse=True)
-        for price, available_volume in sorted_bids:
-              if price > sell_threshold:
-                  qty_to_sell = min(available_volume, state.possible_sell_amt) # Respect available + limit
-                  if qty_to_sell > 0:
-                      orders.append(Order(MACARON_PRODUCT, price, -qty_to_sell))
-                      state.rt_position_update(state.rt_position - qty_to_sell) # Update internal tracker
-                      self.logger.print(f"Take Sell: {-qty_to_sell}@{price} (Threshold > {sell_threshold:.2f})")
-                      if state.rt_position == -MACARON_POSITION_LIMIT: break # Stop if limit hit
-              else:
-                   break # Prices sorted descending
-
+    # --- Take Logic ---
+    def _take_orders(self, state: Any, buy_cost: float, sell_rev: float, edge: float) -> List[Order]:
+        orders: List[Order] = []
+        eff_edge = edge * self.cfg.TAKE_EDGE_PROB_FACTOR
+        thr_buy = sell_rev - eff_edge
+        for price, vol in sorted(state.asks):
+            if price >= thr_buy:
+                break
+            qty = min(-vol, state.possible_buy_amt)
+            if qty <= 0:
+                continue
+            orders.append(Order(MACARON_PRODUCT, price, qty))
+            state.rt_position_update(state.rt_position + qty)
+            if state.rt_position == self.cfg.POSITION_LIMIT:
+                break
+        thr_sell = buy_cost + eff_edge
+        for price, vol in sorted(state.bids, reverse=True):
+            if price <= thr_sell:
+                break
+            qty = min(vol, state.possible_sell_amt)
+            if qty <= 0:
+                continue
+            orders.append(Order(MACARON_PRODUCT, price, -qty))
+            state.rt_position_update(state.rt_position - qty)
+            if state.rt_position == -self.cfg.POSITION_LIMIT:
+                break
         return orders
 
-
-    def _make_local_orders(self, state: Status, pristine_buy_cost: float, pristine_sell_revenue: float, edge: float) -> List[Order]:
-        """ Places resting MM orders based on implied levels and edge. """
-        orders = []
-
-        # Target prices based on where we could convert
-        target_bid_price = int(round(pristine_sell_revenue - edge))
-        target_ask_price = int(round(pristine_buy_cost + edge))
-
-        if target_bid_price >= target_ask_price: # Fallback if edge makes prices cross
-            mid_implied = (pristine_buy_cost + pristine_sell_revenue) / 2
-            target_bid_price = int(mid_implied - 1)
-            target_ask_price = int(mid_implied + 1)
-
-        # Basic pennying/adjustment based on existing best prices (optional)
-        # if state.bids and target_bid_price <= state.best_bid: target_bid_price = state.best_bid + 1
-        # if state.asks and target_ask_price >= state.best_ask: target_ask_price = state.best_ask - 1
-
-        # Place bid order
-        bid_qty = min(MACARON_MM_ORDER_SIZE, state.possible_buy_amt) # Uses rt_position already updated by takes
-        if bid_qty > 0:
-            orders.append(Order(MACARON_PRODUCT, target_bid_price, bid_qty))
-            # self.logger.print(f"Make Bid: {bid_qty}@{target_bid_price}")
-
-        # Place ask order
-        ask_qty = min(MACARON_MM_ORDER_SIZE, state.possible_sell_amt) # Uses rt_position updated by takes
-        if ask_qty > 0:
-            orders.append(Order(MACARON_PRODUCT, target_ask_price, -ask_qty))
-            # self.logger.print(f"Make Ask: {-ask_qty}@{target_ask_price}")
-
+    # --- Make Logic ---
+    def _make_orders(self, state: Any, buy_cost: float, sell_rev: float, edge: float) -> List[Order]:
+        orders: List[Order] = []
+        bid_p = int(round(sell_rev - edge))
+        ask_p = int(round(buy_cost + edge))
+        if bid_p >= ask_p:
+            mid = (buy_cost + sell_rev) / 2
+            bid_p, ask_p = int(mid - 1), int(mid + 1)
+        bq = min(self.cfg.MM_ORDER_SIZE, state.possible_buy_amt)
+        if bq > 0:
+            orders.append(Order(MACARON_PRODUCT, bid_p, bq))
+        aq = min(self.cfg.MM_ORDER_SIZE, state.possible_sell_amt)
+        if aq > 0:
+            orders.append(Order(MACARON_PRODUCT, ask_p, -aq))
         return orders
 
-    # --- Main Run Method ---
-    def run(self, state: Status, timestamp: int) -> Tuple[List[Order], int]:
-        """ Executes the Orchid-inspired strategy for Macarons. """
-        all_orders: List[Order] = []
+    # --- Safety Flatten ---
+    def _safety_flatten(self, state: Any) -> List[Order]:
+        orders: List[Order] = []
+        delta = -state.rt_position
+        if delta > 0:
+            for price, vol in sorted(state.asks):
+                if delta <= 0:
+                    break
+                qty = min(delta, -vol, state.possible_buy_amt)
+                if qty <= 0:
+                    continue
+                orders.append(Order(MACARON_PRODUCT, price, qty))
+                state.rt_position_update(state.rt_position + qty)
+                delta -= qty
+        elif delta < 0:
+            rem = -delta
+            for price, vol in sorted(state.bids, reverse=True):
+                if rem <= 0:
+                    break
+                qty = min(rem, vol, state.possible_sell_amt)
+                if qty <= 0:
+                    continue
+                orders.append(Order(MACARON_PRODUCT, price, -qty))
+                state.rt_position_update(state.rt_position - qty)
+                rem -= qty
+        return orders
 
-        # 1. Get Observations
+    # --- Run ---
+    def run(self, state: Any, timestamp: int) -> Tuple[List[Order], int]:
         obs = state._state.observations.conversionObservations.get(MACARON_PRODUCT)
         if not obs:
-            self.logger.print(f"WARN ({timestamp}): No ConversionObservation for {MACARON_PRODUCT}")
+            self.logger.print(f"WARN ({timestamp}): no obs for {MACARON_PRODUCT}")
             return [], 0
-
-        # 2. Get Current State & Mode
-        current_position = state.position # Actual position at start of tick
-        self._update_csi_state(obs.sunlightIndex)
-        mode = self._get_trading_mode(timestamp)
-        # Set initial rt_position for this tick's logic
-        state.rt_position_update(current_position)
-
-        # 3. Request Conversion to Flatten
-        conversions_requested = self._request_conversion(current_position)
-        # Update rt_position to reflect the *intended* state after conversion for planning
-        state.rt_position_update(current_position + conversions_requested)
-        self.logger.print(f"Macaron ({timestamp}) Pos: {current_position}, ReqConv: {conversions_requested}, EstRTpos: {state.rt_position}")
-
-
-        # 4. Calculate Levels & Adaptive Edge
-        pristine_buy_cost, pristine_sell_revenue = self._calculate_pristine_levels(obs)
-        adaptive_edge = self._adapt_edge(current_position, timestamp, mode) # Adapt based on actual start position
-        self.logger.print(f"Mode: {mode}, Edge: {adaptive_edge:.2f}, ImpBuyC: {pristine_buy_cost:.2f}, ImpSellR: {pristine_sell_revenue:.2f}")
-
-
-        # 5. Take Logic: Aggressively trade if local price beats implied + scaled edge
-        # Pass the *updated* rt_position status object for limit checks
-        take_orders = self._take_local_orders(state, pristine_buy_cost, pristine_sell_revenue, adaptive_edge, MACARON_TAKE_EDGE_PROB_FACTOR)
-        all_orders.extend(take_orders)
-        # rt_position within 'state' object is now updated by take logic
-
-
-        # 6. Make Logic: Place resting orders around implied levels +/- edge
-        # Check limits against the potentially modified rt_position after takes
-        if "FLATTENING" not in mode: # Avoid placing new MM orders when trying to flatten urgently
-             make_orders = self._make_local_orders(state, pristine_buy_cost, pristine_sell_revenue, adaptive_edge)
-             all_orders.extend(make_orders)
-        # else:
-             # self.logger.print(f"Skipping MM orders in mode: {mode}")
-
-        # 7. End of Round Safety Net (Optional - could be removed if confident in conversions)
-        # The continuous conversion *should* handle most flattening.
-        # This is a fallback using only Market Orders if near the end and still not flat.
-        # Check rt_position *after* takes/makes.
-        if mode == "FLATTENING_URGENT" and state.rt_position != 0:
-             self.logger.print(f"Urgent Flattening Safety Net: rt_pos = {state.rt_position}")
-             safety_orders = []
-             target_pos = 0
-             delta = target_pos - state.rt_position
-             if delta > 0: # Need to buy
-                 needed = delta
-                 for price, vol in sorted(state.asks):
-                     if needed <= 0: break
-                     qty = min(needed, -vol, state.possible_buy_amt)
-                     if qty > 0:
-                         safety_orders.append(Order(MACARON_PRODUCT, price, qty))
-                         state.rt_position_update(state.rt_position + qty) # Update internal
-                         needed -= qty
-                         self.logger.print(f"Urgent Flatten Buy: {qty}@{price}")
-             elif delta < 0: # Need to sell
-                  needed = -delta
-                  for price, vol in sorted(state.bids, reverse=True):
-                     if needed <= 0: break
-                     qty = min(needed, vol, state.possible_sell_amt)
-                     if qty > 0:
-                         safety_orders.append(Order(MACARON_PRODUCT, price, -qty))
-                         state.rt_position_update(state.rt_position - qty) # Update internal
-                         needed -= qty
-                         self.logger.print(f"Urgent Flatten Sell: {-qty}@{price}")
-             all_orders.extend(safety_orders)
-
-
-        return all_orders, conversions_requested
+        self._update_csi(obs.sunlightIndex)
+        mode = self._compute_mode(timestamp)
+        pos = state.position
+        state.rt_position_update(pos)
+        conv = self._request_conversion(pos)
+        state.rt_position_update(pos + conv)
+        buy_cost, sell_rev = self._calculate_pristine_levels(obs)
+        edge = self._adapt_edge(pos, mode)
+        orders = self._take_orders(state, buy_cost, sell_rev, edge)
+        if mode not in (MODE_FLATTEN, MODE_URGENT):
+            orders += self._make_orders(state, buy_cost, sell_rev, edge)
+        if mode == MODE_URGENT:
+            orders += self._safety_flatten(state)
+        return orders, conv
 
 
 
@@ -1526,294 +1474,186 @@ class Trader:
 
     
 
-
     def run(self, state: TradingState) -> tuple[dict[Symbol, list[Order]], int, str]:
+        # --- Preliminaries ---
         Status.cls_update(state)
         round_number = 5
         current_timestamp = state.timestamp
-        result = {}
+        result: dict[Symbol, list[Order]] = {}
         conversions = 0
 
-        # Decode traderData
-        traderData = {}
+        # --- Decode and prepare traderData ---
+        traderData: Dict[str, Any] = {}
         if state.traderData:
             try:
                 traderData = jsonpickle.decode(state.traderData)
-                # Ensure vol_c_t_history is a list (might be loaded from old format)
+                # Ensure history is list
                 if 'vol_c_t_history' in traderData and not isinstance(traderData['vol_c_t_history'], list):
-                     traderData['vol_c_t_history'] = list(traderData['vol_c_t_history'])
-
-            except Exception as e:
+                    traderData['vol_c_t_history'] = list(traderData['vol_c_t_history'])
+            except Exception:
                 traderData = {}
-
-        # Initialize rolling c_t history as a list if not present
         if 'vol_c_t_history' not in traderData:
-            traderData['vol_c_t_history'] = [] # Use a standard list
-        
+            traderData['vol_c_t_history'] = []
+
+        # --- Load Macaron state ---
         self.macaron_strategy.update_state_from_traderdata(traderData)
 
-        # --- Existing Strategies (Rounds 1, 2, Macarons) ---
-        # (Keep your existing logic here)
+        # --- Round 1 & 2 & pair logic ---
         result["RAINFOREST_RESIN"] = Trade.resin(self.state_resin)
         result["KELP"] = Trade.kelp(self.state_kelp)
         result["SQUID_INK"] = Trade.ema_mean_reversion(self.state_squink)
-        result["PICNIC_BASKET1"] = Trade.basket_1(self.state_picnic1, self.state_jam, self.state_djembes, self.state_croiss)
+        result["PICNIC_BASKET1"] = Trade.basket_1(
+            self.state_picnic1, self.state_jam, self.state_djembes, self.state_croiss
+        )
         result["JAMS"] = Trade.jams(self.state_jam)
-        result["PICNIC_BASKET2"] = Trade.basket_2(self.state_picnic2, self.state_jam, self.state_djembes, self.state_croiss)
+        result["PICNIC_BASKET2"] = Trade.basket_2(
+            self.state_picnic2, self.state_jam, self.state_djembes, self.state_croiss
+        )
+        # DJEMBES-CROISSANTS pair trades
         pair_orders = Trade.djmb_crs_pair(self.state_djembes, self.state_croiss)
-        if "DJEMBES" not in result: result["DJEMBES"] = []
-        if "CROISSANTS" not in result: result["CROISSANTS"] = []
-        for order in pair_orders:
-            if order.symbol == "DJEMBES":
-                result["DJEMBES"].append(order)
-            elif order.symbol == "CROISSANTS":
-                result["CROISSANTS"].append(order)
+        result.setdefault("DJEMBES", [])
+        result.setdefault("CROISSANTS", [])
+        for o in pair_orders:
+            if o.symbol == "DJEMBES":
+                result["DJEMBES"].append(o)
+            elif o.symbol == "CROISSANTS":
+                result["CROISSANTS"].append(o)
+        # CROISSANT EMA
+        cro_ema = Trade.croissant_ema(state)
+        result["CROISSANTS"].extend(cro_ema)
 
-        croissant_ema_orders = Trade.croissant_ema(state)
-        if "CROISSANTS" not in result: result["CROISSANTS"] = []
-        result["CROISSANTS"].extend(croissant_ema_orders)
-
-        ### MACARONS
-        # --- Run NEW Macaron Strategy ---
-        total_conversions = 0
+        # --- Macaron Strategy (Round 4) ---
         try:
-             macaron_orders, macaron_conv_req = self.macaron_strategy.run(self.state_macarons, state.timestamp)
-             result[MACARON_PRODUCT] = macaron_orders
-             total_conversions += macaron_conv_req
+            mac_orders, mac_conv = self.macaron_strategy.run(
+                self.state_macarons, current_timestamp
+            )
+            result[MACARON_PRODUCT] = mac_orders
+            conversions += mac_conv
         except Exception as e:
-             self.macaron_strategy.logger.print(f"ERROR in Macaron Strategy: {e}")
-             # Optionally print traceback:
-             # import traceback
-             # self.macaron_strategy.logger.print(traceback.format_exc())
-             result[MACARON_PRODUCT] = [] # Send no orders if error
+            self.macaron_strategy.logger.print(f"ERROR in Macaron run: {e}")
+            result[MACARON_PRODUCT] = []
 
-        # --- New Volcanic Strategy (Round 3 Algorithm - Using List) ---
-        volcanic_orders = {}
-
-        # Setup: voucher_symbols, strikes, voucher_states, underlying_state
+        # --- Volcanic Strategy (Round 3 Algorithm) ---
+        volcanic_orders: Dict[Symbol, list[Order]] = {}
+        # Setup voucher symbols and states
         voucher_symbols = [
             "VOLCANIC_ROCK_VOUCHER_9500", "VOLCANIC_ROCK_VOUCHER_9750",
             "VOLCANIC_ROCK_VOUCHER_10000", "VOLCANIC_ROCK_VOUCHER_10250",
             "VOLCANIC_ROCK_VOUCHER_10500"
         ]
-        strikes = {symbol: int(symbol.split('_')[-1]) for symbol in voucher_symbols}
+        strikes = {sym: int(sym.split('_')[-1]) for sym in voucher_symbols}
         try:
             voucher_states = {sym: getattr(self, f"state_voucher_{strikes[sym]}") for sym in voucher_symbols}
-            underlying_state = self.state_volcanic_rock
+            underlying = self.state_volcanic_rock
         except AttributeError as e:
-             logger.print(f"CRITICAL ERROR: Missing volcanic state attribute: {e}")
-             final_trader_data = jsonpickle.encode(traderData) # Encode before returning
-             logger.flush(state, result, conversions, final_trader_data)
-             return result, conversions, final_trader_data
+            logger.print(f"CRITICAL ERROR: Missing volcanic state: {e}")
+            final_data = jsonpickle.encode(traderData)
+            logger.flush(state, result, conversions, final_data)
+            return result, conversions, final_data
 
-        # 1. Get Inputs (S_t, TTE_t)
+        # Inputs: spot, TTE
         try:
-            spot_price = underlying_state.mid
+            spot = underlying.mid
             TTE = compute_time_to_expiry(round_number, current_timestamp)
             r = 0.0
-            logger.print(f"Volcanic Inputs: S_t={spot_price:.2f}, TTE={TTE:.6f} years")
-
-            # Liquidation Check
+            logger.print(f"Volcanic Inputs: S_t={spot:.2f}, TTE={TTE:.6f}")
             if TTE < self.VOL_LIQUIDATION_TTE_DAYS:
-                 logger.print(f"CRITICAL: TTE ({TTE*365.25:.2f} days) < {self.VOL_LIQUIDATION_TTE_DAYS*365.25:.1f} day(s). Liquidating ALL Volcanic positions.")
-                 # ... (Liquidation logic - unchanged) ...
-                 for symbol in voucher_symbols:
-                    pos = voucher_states[symbol].position
-                    if pos != 0:
-                        price = voucher_states[symbol].best_bid if pos > 0 else voucher_states[symbol].best_ask
+                # Liquidate all
+                for sym in voucher_symbols:
+                    pos = voucher_states[sym].position
+                    if pos:
+                        price = voucher_states[sym].best_bid if pos > 0 else voucher_states[sym].best_ask
                         if price is not None:
-                            if symbol not in volcanic_orders: volcanic_orders[symbol] = []
-                            volcanic_orders[symbol].append(Order(symbol, int(price), -pos))
-                 rock_pos = underlying_state.position
-                 if rock_pos != 0:
-                    price = underlying_state.best_bid if rock_pos > 0 else underlying_state.best_ask
+                            volcanic_orders.setdefault(sym, []).append(Order(sym, int(price), -pos))
+                rock_pos = underlying.position
+                if rock_pos:
+                    price = underlying.best_bid if rock_pos > 0 else underlying.best_ask
                     if price is not None:
-                        if "VOLCANIC_ROCK" not in volcanic_orders: volcanic_orders["VOLCANIC_ROCK"] = []
-                        volcanic_orders["VOLCANIC_ROCK"].append(Order("VOLCANIC_ROCK", int(price), -rock_pos))
-
-                 final_trader_data = jsonpickle.encode(traderData)
-                 for sym, orders in volcanic_orders.items():
-                      if sym not in result: result[sym] = []
-                      result[sym].extend(orders)
-                 logger.flush(state, result, conversions, final_trader_data)
-                 return result, conversions, final_trader_data
-            # --- End Liquidation Check ---
-
-            if spot_price <= 0: raise ValueError("Underlying spot price is non-positive.")
-            if TTE <= 1e-9: raise ValueError(f"Time to expiry too small: {TTE}")
-
+                        volcanic_orders.setdefault("VOLCANIC_ROCK", []).append(Order("VOLCANIC_ROCK", int(price), -rock_pos))
+                final_data = jsonpickle.encode(traderData)
+                for sym, ords in volcanic_orders.items():
+                    result.setdefault(sym, []).extend(ords)
+                logger.flush(state, result, conversions, final_data)
+                return result, conversions, final_data
+            if spot <= 0 or TTE <= 1e-9:
+                raise ValueError("Invalid spot or TTE")
         except Exception as e:
-            logger.print(f"Error getting Volcanic inputs or TTE: {e}. Skipping Volcanic strategy this tick.")
-            final_trader_data = jsonpickle.encode(traderData)
-            logger.flush(state, result, conversions, final_trader_data)
-            return result, conversions, final_trader_data
+            logger.print(f"Volcanic input error: {e}")
+            final_data = jsonpickle.encode(traderData)
+            logger.flush(state, result, conversions, final_data)
+            return result, conversions, final_data
 
-        # 2. Calculate IVs, Moneyness
-        moneyness_vol_pairs = []
-        sqrt_TTE = math.sqrt(TTE)
-
-        for symbol in voucher_symbols:
-            voucher_state = voucher_states[symbol]
-            K = strikes[symbol]
-            iv = np.nan
-            moneyness = np.nan
-            try:
-                voucher_price = voucher_state.mid
-                if voucher_price is None or voucher_price <= 0: continue
-
-                # Calculate IV (use the function assumed to be defined elsewhere)
-                iv = implied_volatility(voucher_price, spot_price, K, round_number, current_timestamp, r, tol=1e-4, max_iter=1000)
-                # logger.print(f"Raw IV for {symbol}: {iv}") # Keep for debugging if needed
-
-                if not np.isnan(iv) and iv > 1e-6:
-                     # Calculate Moneyness
-                     if K > 0 and spot_price > 0:
-                         log_arg = K / spot_price
-                         if log_arg > 0:
-                             moneyness = math.log(log_arg) / sqrt_TTE
-                         else: moneyness = np.nan
-                     else: moneyness = np.nan
-
-                     if not np.isnan(moneyness):
-                         moneyness_vol_pairs.append((moneyness, iv))
-                     # else: logger.print(f"Skipping pair for {symbol}: Moneyness failed")
-                # else: logger.print(f"Skipping pair for {symbol}: IV failed")
-
-            except Exception as e:
-                logger.print(f"Error processing voucher {symbol} in IV/Moneyness loop: {type(e).__name__} - {e!r}")
-
-
-        # 3. Fit Curve and Get c_t
-        filtered_pairs = [(m, v) for m, v in moneyness_vol_pairs if not np.isnan(m) and not np.isnan(v)]
-        valid_points_count = len(filtered_pairs)
-        logger.print(f"Found {valid_points_count} valid & non-NaN pairs for fitting.")
-
-        c_t = np.nan
-        coeffs = None
-
-        if valid_points_count >= 3:
-            try:
-                m_values = np.array([p[0] for p in filtered_pairs])
-                sigma_values = np.array([p[1] for p in filtered_pairs])
-                coeffs = np.polyfit(m_values, sigma_values, 2)
-                c_t = coeffs[2] # Base implied volatility (at m=0)
-                logger.print(f"Quadratic Fit ({valid_points_count} pts): c_t={c_t:.4f}")
-            except Exception as e:
-                logger.print(f"Error fitting quadratic curve ({valid_points_count} pts): {e}")
-                c_t = np.nan
+        # IV & moneyness
+        pairs = []
+        sqrtT = np.sqrt(TTE)
+        for sym in voucher_symbols:
+            st = voucher_states[sym]
+            K = strikes[sym]
+            price = st.mid
+            if price and price > 0:
+                try:
+                    iv = implied_volatility(price, spot, K, round_number, current_timestamp, r)
+                    if iv and iv > 1e-6:
+                        m = np.log(K/spot)/sqrtT
+                        pairs.append((m, iv))
+                except Exception as ex:
+                    logger.print(f"IV error {sym}: {ex}")
+        # Fit
+        valid = [(m, v) for m, v in pairs if not np.isnan(m) and not np.isnan(v)]
+        logger.print(f"Fit pts: {len(valid)}")
+        if len(valid) >= 3:
+            ms = np.array([x[0] for x in valid])
+            vs = np.array([x[1] for x in valid])
+            coeffs = np.polyfit(ms, vs, 2)
+            c_t = coeffs[2]
         else:
-            logger.print(f"Skipping quadratic fit: Only {valid_points_count} valid points found.")
             c_t = np.nan
+        logger.print(f"c_t: {c_t}")
 
-        logger.print(f"Final c_t value for tick {state.timestamp}: {c_t}")
-
-        # 4. Compare c_t to Historical Mean (No rolling window or Z-score)
-        vol_diff = np.nan
+        # Compare to historical
         if not np.isnan(c_t):
             vol_diff = c_t - self.HISTORICAL_MEAN_VOL
-            logger.print(f"Vol Comparison: c_t={c_t:.4f}, HistMean={self.HISTORICAL_MEAN_VOL:.4f} -> Diff={vol_diff:.4f}")
         else:
-            logger.print("Skipping vol comparison: c_t is NaN.")
+            vol_diff = np.nan
 
+        # ATM select
+        atm = None
+        minm = float('inf')
+        for sym in voucher_symbols:
+            K = strikes[sym]
+            if spot>0 and TTE>1e-9:
+                m = np.log(K/spot)/sqrtT
+                if abs(m)<minm:
+                    minm = abs(m); atm = sym
+        # Signal
+        if atm and not np.isnan(vol_diff):
+            st = voucher_states[atm]; pos = st.position
+            if vol_diff < self.VOL_DIFF_BUY_THRESHOLD and pos<self.VOL_POSITION_LIMIT_PER_STRIKE:
+                q = min(self.VOL_TRADE_SIZE, self.VOL_POSITION_LIMIT_PER_STRIKE-pos, st.possible_buy_amt)
+                if q and st.best_ask:
+                    volcanic_orders.setdefault(atm, []).append(Order(atm, int(st.best_ask), q))
+            elif vol_diff > self.VOL_DIFF_SELL_THRESHOLD and pos>-self.VOL_POSITION_LIMIT_PER_STRIKE:
+                q = min(self.VOL_TRADE_SIZE, self.VOL_POSITION_LIMIT_PER_STRIKE+pos, st.possible_sell_amt)
+                if q and st.best_bid:
+                    volcanic_orders.setdefault(atm, []).append(Order(atm, int(st.best_bid), -q))
+            elif abs(vol_diff)<self.VOL_DIFF_CLOSE_THRESHOLD and pos!=0:
+                price = st.best_bid if pos>0 else st.best_ask
+                q = -pos
+                volcanic_orders.setdefault(atm, []).append(Order(atm, int(price), q))
 
-        # 5. Choose ATM Strike (C_ATM)
-        atm_symbol = None
-        min_abs_moneyness = float('inf')
-        # Re-calculate moneyness for all strikes just for ATM selection
-        for symbol in voucher_symbols:
-             K = strikes[symbol]
-             if K <= 0 or spot_price <= 0 or TTE <= 1e-9: continue
-             try:
-                 log_arg = K / spot_price
-                 if log_arg <= 0: continue
-                 moneyness = math.log(log_arg) / sqrt_TTE
-                 if abs(moneyness) < min_abs_moneyness:
-                      min_abs_moneyness = abs(moneyness)
-                      atm_symbol = symbol
-             except Exception as e:
-                 logger.print(f"Error calculating moneyness for ATM selection ({symbol}): {e}")
+        # Merge volcanic
+        for sym, ords in volcanic_orders.items():
+            result.setdefault(sym, []).extend(ords)
 
-        if atm_symbol:
-             logger.print(f"ATM Strike Selected: {atm_symbol} (|m|={min_abs_moneyness:.4f})")
-        else:
-             logger.print("Could not determine ATM strike.")
+        logger.print("--- Finished Volcanic ---")
 
-
-        # 6. Trading Signal (based on vol_diff and ATM option)
-        if atm_symbol and not np.isnan(vol_diff):
-            atm_state = voucher_states[atm_symbol]
-            atm_position = atm_state.position
-
-            # Buy Signal (Current Vol Too Low)
-            if vol_diff < self.VOL_DIFF_BUY_THRESHOLD:
-                if atm_position < self.VOL_POSITION_LIMIT_PER_STRIKE:
-                    qty_to_buy = min(self.VOL_TRADE_SIZE, self.VOL_POSITION_LIMIT_PER_STRIKE - atm_position, atm_state.possible_buy_amt)
-                    if qty_to_buy > 0:
-                        price = atm_state.best_ask
-                        if price is not None:
-                            order = Order(atm_symbol, int(price), qty_to_buy)
-                            if atm_symbol not in volcanic_orders: volcanic_orders[atm_symbol] = []
-                            volcanic_orders[atm_symbol].append(order)
-                            logger.print(f"TRADE SIGNAL (BUY): {atm_symbol} {qty_to_buy} @ {price} (VolDiff={vol_diff:.4f})")
-                        else: logger.print(f"Cannot place BUY for {atm_symbol}: No asks.")
-                # else: logger.print(f"BUY Signal for {atm_symbol} blocked: At LONG limit")
-
-            # Sell Signal (Current Vol Too High)
-            elif vol_diff > self.VOL_DIFF_SELL_THRESHOLD:
-                if atm_position > -self.VOL_POSITION_LIMIT_PER_STRIKE:
-                    qty_to_sell = min(self.VOL_TRADE_SIZE, self.VOL_POSITION_LIMIT_PER_STRIKE + atm_position, atm_state.possible_sell_amt)
-                    if qty_to_sell > 0:
-                        price = atm_state.best_bid
-                        if price is not None:
-                            order = Order(atm_symbol, int(price), -qty_to_sell)
-                            if atm_symbol not in volcanic_orders: volcanic_orders[atm_symbol] = []
-                            volcanic_orders[atm_symbol].append(order)
-                            logger.print(f"TRADE SIGNAL (SELL): {atm_symbol} {-qty_to_sell} @ {price} (VolDiff={vol_diff:.4f})")
-                        else: logger.print(f"Cannot place SELL for {atm_symbol}: No bids.")
-                # else: logger.print(f"SELL Signal for {atm_symbol} blocked: At SHORT limit")
-
-            # Close Signal (Current Vol Near Historical Mean)
-            elif abs(vol_diff) < self.VOL_DIFF_CLOSE_THRESHOLD:
-                if atm_position != 0:
-                    qty_to_close = -atm_position
-                    price = atm_state.best_bid if atm_position > 0 else atm_state.best_ask
-                    possible_trade_qty = atm_state.possible_sell_amt if atm_position > 0 else atm_state.possible_buy_amt
-                    if abs(qty_to_close) <= possible_trade_qty:
-                         if price is not None:
-                             order = Order(atm_symbol, int(price), qty_to_close)
-                             if atm_symbol not in volcanic_orders: volcanic_orders[atm_symbol] = []
-                             volcanic_orders[atm_symbol].append(order)
-                             logger.print(f"TRADE SIGNAL (CLOSE): {atm_symbol} {qty_to_close} @ {price} (|VolDiff|={abs(vol_diff):.4f})")
-                         else: logger.print(f"Cannot place CLOSE for {atm_symbol}: No bid/ask.")
-                    # else: logger.print(f"CLOSE Signal for {atm_symbol} blocked: Cannot trade quantity")
-                # else: logger.print(f"CLOSE Signal: No position in {atm_symbol} to close.")
-            # else: logger.print(f"No trade signal for {atm_symbol}: VolDiff {vol_diff:.4f} within deadzone.")
-
-        elif not atm_symbol:
-            logger.print("No trade signal: ATM symbol not determined.")
-        elif np.isnan(vol_diff):
-             logger.print("No trade signal: vol_diff is NaN (likely c_t was NaN).")
-
-
-        # 7. Delta Hedging (Skipped)
-
-        # 8. Risk Constraints Check (Limits checked above)
-
-        # --- Merge Volcanic Orders ---
-        for symbol, orders in volcanic_orders.items():
-             if symbol not in result: result[symbol] = []
-             result[symbol].extend(orders)
-
-        logger.print("--- Finished Volcanic Strategy ---")
-
-        # --- Final Steps ---
+        # --- Finalize ---
         self.macaron_strategy.save_state_to_traderdata(traderData)
-        final_trader_data = ""
         try:
-            # Encode traderData (without vol_c_t_history)
-            final_trader_data = jsonpickle.encode(traderData)
+            final_data = jsonpickle.encode(traderData)
         except Exception as e:
-            logger.print(f"Error encoding traderData: {e}")
+            final_data = ""
+            self.macaron_strategy.logger.print(f"Encode error: {e}")
 
-        logger.flush(state, result, int(round(conversions)), final_trader_data)
-        return result, int(round(conversions)), final_trader_data
+        logger.flush(state, result, conversions, final_data)
+        return result, conversions, final_data
