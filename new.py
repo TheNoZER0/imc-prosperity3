@@ -149,78 +149,6 @@ def evaluate_parabolic(m: float, coeffs: np.ndarray) -> float:
 voucher_m_history: List[float] = []
 voucher_v_history: List[float] = []
 
-def compute_voucher_trade(voucher_state, strike: float, round_number: int, current_timestamp: int,
-                          r: float = 0.0, vol_multiplier: float = 1.2,
-                          base_buffer: float = 5.0, hedge_scale: float = 0.5) -> List[Order]:
-    S = voucher_state.mid
-    hist = voucher_state.hist_mid_prc(50)
-    sigma_hist = np.std(hist)
-    if sigma_hist <= 0:
-        sigma_hist = 0.01
-    # Here we use the recent price volatility (sigma_hist) multiplied by vol_multiplier as a proxy for volatility.
-    volatility = sigma_hist * vol_multiplier
-    TTE = compute_time_to_expiry(round_number, current_timestamp)
-    
-    # Compute option parameters.
-    d1 = (math.log(S / strike) + (r + 0.5 * volatility**2) * TTE) / (volatility * math.sqrt(TTE))
-    d2 = d1 - volatility * math.sqrt(TTE)
-    fair_value = bs_coupon_price(S, strike, TTE, r, volatility)
-    
-    # Record some history (you already have these for plotting/curve fit).
-    current_m = compute_m_t(S, strike, TTE)
-    current_v = implied_volatility(S, S, strike, round_number, current_timestamp)
-    voucher_m_history.append(current_m)
-    voucher_v_history.append(current_v)
-    
-    if len(voucher_m_history) >= 20:
-        m_array = np.array(voucher_m_history[-20:])
-        v_array = np.array(voucher_v_history[-20:])
-        coeffs = fit_parabolic(m_array, v_array)
-        base_IV = math.log(coeffs[2])  # Base IV is the constant term at m=0 (logged).
-        #logger.print(f"Fitted Parabola Coeffs: {coeffs}, Base IV = {base_IV:.2f}")
-    else:
-        base_IV = None
-
-    # *** INSERT DELTA COMPUTATION SNIPPET HERE ***
-    # Compute delta using the IV we computed (or use current_v as the IV proxy)
-    if not np.isnan(current_v) and current_v > 1e-6:
-        delta = calculate_delta(S, strike, TTE, r, current_v)
-    else:
-        delta = 1.0 if S > strike else 0.0
-
-    # Persist the computed delta in Trader.voucher_deltas using a consistent key format.
-    Trader.voucher_deltas[str(int(strike))] = delta
-    #logger.print(f"[Delta Info] For strike {strike}: Delta = {delta:.2f}")
-    # *** END OF DELTA COMPUTATION SNIPPET ***
-
-    # Now, use a dynamic buffer based on volatility to set target buy/sell thresholds:
-    buffer = base_buffer * volatility
-    target_buy = fair_value - buffer
-    target_sell = fair_value + buffer
-
-    #logger.print(f"[Voucher Trade] {voucher_state.product}: S = {S:.2f}, Fair Value = {fair_value:.2f}, "
-                 #f"Target Buy = {target_buy:.2f}, Target Sell = {target_sell:.2f}, Delta = {norm_cdf(d1):.2f}")
-
-    orders = []
-    if S < target_buy:
-        qty = voucher_state.possible_buy_amt
-        if qty > 0:
-            orders.append(Order(voucher_state.product, int(S), qty))
-            hedge_qty = int(hedge_scale * norm_cdf(d1) * qty)
-            if hedge_qty > 0:
-                orders.append(Order("VOLCANIC_ROCK", int(voucher_state.mid), -hedge_qty))
-            #logger.print(f"Voucher BUY: {voucher_state.product} qty = {qty}, hedge_qty = {hedge_qty}")
-    elif S > target_sell:
-        qty = voucher_state.possible_sell_amt
-        if qty > 0:
-            orders.append(Order(voucher_state.product, int(S), -qty))
-            hedge_qty = int(hedge_scale * norm_cdf(d1) * qty)
-            if hedge_qty > 0:
-                orders.append(Order("VOLCANIC_ROCK", int(voucher_state.mid), hedge_qty))
-            #logger.print(f"Voucher SELL: {voucher_state.product} qty = {qty}, hedge_qty = {hedge_qty}")
-    
-    return orders
-
 
 class Logger:
     def __init__(self) -> None:
@@ -1283,13 +1211,6 @@ class Strategy:
             return -state.position
         else:
             return 0
-        
-    @staticmethod
-    def voucher_trade(voucher_state: 'Status', strike: float, round_number: int, current_timestamp: int,
-                        r: float = 0.0, vol_multiplier: float = 1.2,
-                        base_buffer: float = 5.0, hedge_scale: float = 0.5) -> List[Order]:
-        return compute_voucher_trade(voucher_state, strike, round_number, current_timestamp,
-                                     r, vol_multiplier, base_buffer, hedge_scale)
 
 CROISSANTS = "CROISSANTS"
 EMA_PERIOD = 13
@@ -1431,11 +1352,6 @@ class Trade:
         return orders
     
     @staticmethod
-    def voucher_trade(voucher_state: 'Status', strike: float, round_number: int, current_timestamp: int) -> List[Order]:
-        return Strategy.voucher_trade(voucher_state, strike, round_number, current_timestamp)
-    
-
-    @staticmethod
     def volcanic_rock(state: Status) -> list[Order]:
         current_price = state.mid
         if state.position < 0 and state.position < -int(state.position_limit * 0.5):
@@ -1464,9 +1380,9 @@ class Trader:
     state_volcanic_rock = Status("VOLCANIC_ROCK")
     state_macarons = Status(MACARON_PRODUCT)
 
-    VOL_TRADE_SIZE = 10
-    VOL_POSITION_LIMIT_PER_STRIKE = 100 
-    VOL_UNDERLYING_POSITION_LIMIT = 300
+    VOL_TRADE_SIZE = 20
+    VOL_POSITION_LIMIT_PER_STRIKE = 150 
+    VOL_UNDERLYING_POSITION_LIMIT = 400
     HISTORICAL_MEAN_VOL = 8.5e-6
     VOL_DIFF_SELL_THRESHOLD = 2.5e-7
     VOL_DIFF_BUY_THRESHOLD  = -2.5e-7
@@ -1581,7 +1497,7 @@ class Trader:
                 voucher_price = voucher_state.mid
                 if voucher_price is None or voucher_price <= 0: continue
                 r= 0.0
-                iv = implied_volatility(voucher_price, spot_price, K, round_number, current_timestamp, r, tol=1e-4, max_iter=1000)
+                iv = implied_volatility(voucher_price, spot_price, K, round_number, current_timestamp, r, tol=1e-9, max_iter=1000)
 
                 if not np.isnan(iv) and iv > 1e-9:
                      if K > 0 and spot_price > 0:
@@ -1614,7 +1530,7 @@ class Trader:
                 sigma_values = np.array([p[1] for p in filtered_pairs])
                 coeffs = np.polyfit(m_values, sigma_values, 2)
                 c_t = coeffs[2]
-                logger.print(f"Quadratic Fit ({valid_points_count} pts): c_t={c_t:.4f}")
+                logger.print(f"Quadratic Fit ({valid_points_count} pts): c_t={c_t:.10f}")
             except Exception as e:
                 logger.print(f"Error fitting quadratic curve ({valid_points_count} pts): {e}")
                 c_t = np.nan
@@ -1628,7 +1544,7 @@ class Trader:
         vol_diff = np.nan
         if not np.isnan(c_t):
             vol_diff = c_t - self.HISTORICAL_MEAN_VOL
-            logger.print(f"Vol Comparison: c_t={c_t:.4f}, HistMean={self.HISTORICAL_MEAN_VOL:.4f} -> Diff={vol_diff:.4f}")
+            logger.print(f"Vol Comparison: c_t={c_t:.10f}, HistMean={self.HISTORICAL_MEAN_VOL:.10f} -> Diff={vol_diff:.10f}")
         else:
             logger.print("Skipping vol comparison: c_t is NaN.")
 
@@ -1645,56 +1561,50 @@ class Trader:
                  atm_symbol = symbol
 
         if atm_symbol:
-             logger.print(f"ATM Strike Selected: {atm_symbol} (|m|={min_abs_moneyness:.4f})")
+             logger.print(f"ATM Strike Selected: {atm_symbol} (|m|={min_abs_moneyness:.10f})")
         else:
              logger.print("Could not determine ATM strike.")
 
-
-        # 6. Trading Signal (based on vol_diff and ATM option)
         if atm_symbol and not np.isnan(vol_diff):
             atm_state = voucher_states[atm_symbol]
             atm_position = atm_state.position
-
-            # Buy Signal (Current Vol Too Low)
+    
             if vol_diff < self.VOL_DIFF_BUY_THRESHOLD:
+                logger.print(f"SIGMA WARRIOR")
                 if atm_position < self.VOL_POSITION_LIMIT_PER_STRIKE:
                     qty_to_buy = min(self.VOL_TRADE_SIZE, self.VOL_POSITION_LIMIT_PER_STRIKE - atm_position, atm_state.possible_buy_amt)
                     if qty_to_buy > 0:
-                        price = atm_state.best_ask
+                        price = atm_state.best_ask + 5
                         if price is not None:
                             order = Order(atm_symbol, int(price), qty_to_buy)
                             if atm_symbol not in volcanic_orders: volcanic_orders[atm_symbol] = []
                             volcanic_orders[atm_symbol].append(order)
-                            logger.print(f"TRADE SIGNAL (BUY): {atm_symbol} {qty_to_buy} @ {price} (VolDiff={vol_diff:.4f})")
+                            logger.print(f"TRADE SIGNAL (BUY): {atm_symbol} {qty_to_buy} @ {price} (VolDiff={vol_diff:.10f})")
                         else: logger.print(f"Cannot place BUY for {atm_symbol}: No asks.")
-                # else: logger.print(f"BUY Signal for {atm_symbol} blocked: At LONG limit")
-
-            # Sell Signal (Current Vol Too High)
+            
             elif vol_diff > self.VOL_DIFF_SELL_THRESHOLD:
                 if atm_position > -self.VOL_POSITION_LIMIT_PER_STRIKE:
                     qty_to_sell = min(self.VOL_TRADE_SIZE, self.VOL_POSITION_LIMIT_PER_STRIKE + atm_position, atm_state.possible_sell_amt)
                     if qty_to_sell > 0:
-                        price = atm_state.best_bid
+                        price = atm_state.best_bid - 5
                         if price is not None:
                             order = Order(atm_symbol, int(price), -qty_to_sell)
                             if atm_symbol not in volcanic_orders: volcanic_orders[atm_symbol] = []
                             volcanic_orders[atm_symbol].append(order)
-                            logger.print(f"TRADE SIGNAL (SELL): {atm_symbol} {-qty_to_sell} @ {price} (VolDiff={vol_diff:.4f})")
+                            logger.print(f"TRADE SIGNAL (SELL): {atm_symbol} {-qty_to_sell} @ {price} (VolDiff={vol_diff:.10f})")
                         else: logger.print(f"Cannot place SELL for {atm_symbol}: No bids.")
-                # else: logger.print(f"SELL Signal for {atm_symbol} blocked: At SHORT limit")
-
-            # Close Signal (Current Vol Near Historical Mean)
+            
             elif abs(vol_diff) < self.VOL_DIFF_CLOSE_THRESHOLD:
                 if atm_position != 0:
                     qty_to_close = -atm_position
-                    price = atm_state.best_bid if atm_position > 0 else atm_state.best_ask
+                    price = atm_state.best_bid -2 if atm_position > 0 else atm_state.best_ask +2
                     possible_trade_qty = atm_state.possible_sell_amt if atm_position > 0 else atm_state.possible_buy_amt
                     if abs(qty_to_close) <= possible_trade_qty:
                          if price is not None:
                              order = Order(atm_symbol, int(price), qty_to_close)
                              if atm_symbol not in volcanic_orders: volcanic_orders[atm_symbol] = []
                              volcanic_orders[atm_symbol].append(order)
-                             logger.print(f"TRADE SIGNAL (CLOSE): {atm_symbol} {qty_to_close} @ {price} (|VolDiff|={abs(vol_diff):.4f})")
+                             logger.print(f"TRADE SIGNAL (CLOSE): {atm_symbol} {qty_to_close} @ {price} (|VolDiff|={abs(vol_diff):.10f})")
                          else: logger.print(f"Cannot place CLOSE for {atm_symbol}: No bid/ask.")
 
         elif not atm_symbol:
@@ -1702,23 +1612,112 @@ class Trader:
         elif np.isnan(vol_diff):
              logger.print("No trade signal: vol_diff is NaN (likely c_t was NaN).")
 
-
-        # 7. Delta Hedging (Skipped)
-
-        # 8. Risk Constraints Check (Limits checked above)
-
-        # --- Merge Volcanic Orders ---
         for symbol, orders in volcanic_orders.items():
              if symbol not in result: result[symbol] = []
              result[symbol].extend(orders)
 
-        logger.print("--- Finished Volcanic Strategy ---")
+        current_voucher_deltas = {}
+        spot_price = self.state_volcanic_rock.mid # Or other fair value estimate
+        TTE = compute_time_to_expiry(round_number, current_timestamp)
+        r = 0.0 # Risk-free rate
 
-        # --- Final Steps ---
+        for symbol in voucher_symbols:
+            K = strikes[symbol]
+            voucher_state = voucher_states[symbol]
+            voucher_price = voucher_state.mid
+
+            # Choose your volatility source:
+            # Option A: Use per-strike IV
+            iv = implied_volatility(voucher_price, spot_price, K, round_number, current_timestamp, r)
+            if np.isnan(iv) or iv <= 1e-6:
+                # Fallback if IV calculation fails (e.g., use historical or fitted, or default)
+                iv = 0.1 # Example default - choose carefully! Or use fitted if available
+                logger.print(f"WARN: IV failed for {symbol}, using fallback: {iv}")
+
+            # Option B: Use fitted volatility (if coeffs are valid)
+            # if coeffs is not None:
+            #     m = compute_m_t(spot_price, K, TTE)
+            #     if not np.isnan(m):
+            #         iv = evaluate_parabolic(m, coeffs)
+            #         if iv <= 1e-6: iv = 0.1 # Add floor
+            #     else: iv = 0.1 # Fallback
+            # else: iv = 0.1 # Fallback if no fit
+
+            try:
+                delta = calculate_delta(spot_price, K, TTE, r, iv)
+                current_voucher_deltas[symbol] = delta
+                # logger.print(f"Delta Calc: {symbol}, S={spot_price:.1f}, K={K}, TTE={TTE:.4f}, IV={iv:.4f} -> Delta={delta:.4f}")
+            except Exception as e:
+                logger.print(f"ERROR calculating delta for {symbol}: {e}")
+                current_voucher_deltas[symbol] = 0.0
+        total_delta_exposure = 0.0
+
+        for symbol in voucher_symbols:
+            position = state.position.get(symbol, 0) # Get current position for this voucher
+            delta = current_voucher_deltas.get(symbol, 0.0) # Get the delta calculated in Step 1
+            total_delta_exposure += position * delta
+
+        logger.print(f"Total Net Voucher Delta Exposure: {total_delta_exposure:.4f}")
+
+        # Inside Trader.run
+
+        target_underlying_position = -round(total_delta_exposure) # Round to nearest integer
+        logger.print(f"Target Underlying Position (Hedge): {target_underlying_position}")
+
+        current_underlying_position = state.position.get("VOLCANIC_ROCK", 0)
+        hedge_trade_quantity = target_underlying_position - current_underlying_position
+        logger.print(f"Current Underlying: {current_underlying_position}, Hedge Trade Needed: {hedge_trade_quantity}")
+
+        underlying_state = self.state_volcanic_rock # Get the Status object for VOLCANIC_ROCK
+
+        if "VOLCANIC_ROCK" not in result:
+            result["VOLCANIC_ROCK"] = []
+
+        if hedge_trade_quantity != 0:
+            # Check position limits BEFORE placing the trade
+            potential_new_pos = current_underlying_position + hedge_trade_quantity
+            limit = underlying_state.position_limit
+
+            if abs(potential_new_pos) > limit:
+                logger.print(f"WARN: Hedge trade ({hedge_trade_quantity}) would exceed limit ({limit}). Clipping.")
+                if hedge_trade_quantity > 0: # Need to buy
+                    hedge_trade_quantity = limit - current_underlying_position
+                else: # Need to sell
+                    hedge_trade_quantity = -limit - current_underlying_position
+                logger.print(f"Clipped Hedge Trade Quantity: {hedge_trade_quantity}")
+
+
+            if hedge_trade_quantity > 0: # Need to buy
+                # Place buy order(s) - Market taking is fastest for hedging
+                price_to_hit = underlying_state.best_ask
+                if price_to_hit is not None:
+                    # Consider max order size / available volume at best ask
+                    can_buy_at_best = underlying_state.askamt(price_to_hit) # should be negative
+                    trade_size = min(hedge_trade_quantity, abs(can_buy_at_best), underlying_state.possible_buy_amt) # Check internal limit tracker too
+                    if trade_size > 0:
+                        result["VOLCANIC_ROCK"].append(Order("VOLCANIC_ROCK", int(price_to_hit), int(trade_size)))
+                        logger.print(f"Executing Hedge BUY: {trade_size} @ {price_to_hit}")
+                        # TODO: If trade_size < hedge_trade_quantity, potentially place more orders at next price level or wait.
+                    else: logger.print("WARN: Hedge BUY failed - No volume at best ask or limit hit.")
+                else: logger.print("WARN: Hedge BUY failed - No asks available.")
+
+            elif hedge_trade_quantity < 0: # Need to sell
+                # Place sell order(s) - Market taking is fastest
+                price_to_hit = underlying_state.best_bid
+                if price_to_hit is not None:
+                    # Consider max order size / available volume at best bid
+                    can_sell_at_best = underlying_state.bidamt(price_to_hit) # should be positive
+                    trade_size = min(abs(hedge_trade_quantity), abs(can_sell_at_best), underlying_state.possible_sell_amt) # Check internal limit tracker too
+                    if trade_size > 0:
+                        result["VOLCANIC_ROCK"].append(Order("VOLCANIC_ROCK", int(price_to_hit), -int(trade_size)))
+                        logger.print(f"Executing Hedge SELL: {-trade_size} @ {price_to_hit}")
+                        # TODO: If trade_size < abs(hedge_trade_quantity), potentially place more orders at next price level or wait.
+                    else: logger.print("WARN: Hedge SELL failed - No volume at best bid or limit hit.")
+                else: logger.print("WARN: Hedge SELL failed - No bids available.")
+
         self.macaron_strategy.save_state_to_traderdata(traderData)
         final_trader_data = ""
         try:
-            # Encode traderData (without vol_c_t_history)
             final_trader_data = jsonpickle.encode(traderData)
         except Exception as e:
             logger.print(f"Error encoding traderData: {e}")
