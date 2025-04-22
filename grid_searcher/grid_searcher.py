@@ -121,21 +121,26 @@ if __name__ == '__main__':
         # "threshold_p": [i for i in range(1,100)]
         # "cross_z": [i for i in np.arange(0, 3, 0.2)],
         # "cross_ema": [i for i in range(5,100,2)],
-        # "alpha_ema": [i for i in np.arange(0, 1, 0.05)],
-        # "threshold_ema": [i for i in np.arange(0,30, 0.5)]
+        #"alpha": [i for i in np.arange(0.1, 1, 0.05)],
+        #"thresh": [i for i in np.arange(0,100, 4)]
         #"threshold_volc": [i for i in np.arange(31, 37, 0.05)],
-        "hold": [i for i in range(5, 20, 5)],
+        #"hold": [i for i in range(5, 20, 5)],
         #"arb": [i for i in range(5, 40, 2)],
-        "longp": [i for i in range(10, 50, 2)]
+        #"longp": [i for i in range(10, 50, 2)]
         # "volthresh": [i for i in np.arange(0.5, 1.5, 0.1)],
         # "csi": [i for i in np.arange(20, 50, 5)],
         #"panic": [i for i in np.arange(1, 10, 0.2)],
+        # explore from 1e‑7 up to 4e‑7 in five steps
+        #"vol_buy":  np.linspace(1e-7, 4e-7, num=10).tolist(),  
+        # explore from 3e‑7 up to 7e‑7 in five steps
+        #"vol_sell": np.linspace(3e-7, 7e-7, num=10).tolist()
+        "tol": np.linspace(1.0e-7, 1e-3, num=100).tolist(),
     }   
     
     results = grid_search_backtest(
-        algorithm_file_path=r"../algos/zain.py",
+        algorithm_file_path=r"../algos/new2.py",
         grid=grid,
-        rounds=["4"],
+        rounds=["5"],
         data_path=None
     )
     
