@@ -1270,11 +1270,11 @@ class Trader:
     voucher_deltas = {}
     
     VOL_PARAMS = {
-        "std_window": {{std}},
+        "std_window": 10,
         "mean_volatility": {
             '9500': 0.129, '9750': 0.159, '10000': 0.149, '10250': 0.138, '10500': 0.142 # Use STRINGS
         },
-        "zscore_threshold": {{zscore}}, # default 2
+        "zscore_threshold": 1, # default 2
         "trade_size": 200, # default 20
     }
 
@@ -1524,7 +1524,7 @@ class Trader:
 
         logger.print(f"Delta Hedge: CurrentVoucherDelta={current_portfolio_delta:.2f}, NewTradeDelta={net_voucher_delta_change:.2f}, TargetNetDelta={total_target_delta:.2f}")
         logger.print(f"Hedge Calc: TargetHedgePos={target_hedge_position}, CurrentHedgePos={current_hedge_position}, OrderQty={hedge_order_qty}")
-
+        result["VOLCANIC_ROCK"] = Trade.ema_mean_reversion(self.state_volcanic_rock, alpha=0.2, threshold=12)
         # Create hedge order for VOLCANIC_ROCK if needed
         # if abs(hedge_order_qty) > 0:
         #     best_bid_vr = self.state_volcanic_rock.best_bid
