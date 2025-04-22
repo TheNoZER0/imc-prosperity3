@@ -1459,7 +1459,7 @@ class Trader:
                 traderData = jsonpickle.decode(state.traderData)
                 # Ensure vol_c_t_history is a list (might be loaded from old format)
                 if 'vol_c_t_history' in traderData and not isinstance(traderData['vol_c_t_history'], list):
-                     traderData['vol_c_t_history'] = list(traderData['vol_c_t_history'])
+                    traderData['vol_c_t_history'] = list(traderData['vol_c_t_history'])
 
             except Exception as e:
                 traderData = {}
@@ -1480,8 +1480,8 @@ class Trader:
         if "DJEMBES" not in result: result["DJEMBES"] = []
         if "CROISSANTS" not in result: result["CROISSANTS"] = []
         for order in pair_orders:
-             if order.symbol == "DJEMBES":
-                 result["DJEMBES"].append(order)
+            if order.symbol == "DJEMBES":
+                result["DJEMBES"].append(order)
         #     elif order.symbol == "CROISSANTS":
         #         result["CROISSANTS"].append(order)
 
@@ -1517,10 +1517,10 @@ class Trader:
             voucher_states = {sym: getattr(self, f"state_voucher_{strikes[sym]}") for sym in voucher_symbols}
             underlying_state = self.state_volcanic_rock
         except AttributeError as e:
-             logger.print(f"CRITICAL ERROR: Missing volcanic state attribute: {e}")
-             final_trader_data = jsonpickle.encode(traderData) # Encode before returning
-             logger.flush(state, result, conversions, final_trader_data)
-             return result, conversions, final_trader_data
+            logger.print(f"CRITICAL ERROR: Missing volcanic state attribute: {e}")
+            final_trader_data = jsonpickle.encode(traderData) # Encode before returning
+            logger.flush(state, result, conversions, final_trader_data)
+            return result, conversions, final_trader_data
 
         # 1. Get Inputs (S_t, TTE_t)
         try:
@@ -1550,15 +1550,15 @@ class Trader:
                 iv = implied_volatility(voucher_price, spot_price, K, round_number, current_timestamp, r, tol=7.08e-05, max_iter=1000)
 
                 if not np.isnan(iv) and iv > 1e-9:
-                     if K > 0 and spot_price > 0:
-                         log_arg = K / spot_price
-                         if log_arg > 0:
-                             moneyness = math.log(log_arg) / sqrt_TTE
-                         else: moneyness = np.nan
-                     else: moneyness = np.nan
+                    if K > 0 and spot_price > 0:
+                        log_arg = K / spot_price
+                        if log_arg > 0:
+                            moneyness = math.log(log_arg) / sqrt_TTE
+                        else: moneyness = np.nan
+                    else: moneyness = np.nan
 
-                     if not np.isnan(moneyness):
-                         moneyness_vol_pairs.append((moneyness, iv))
+                    if not np.isnan(moneyness):
+                        moneyness_vol_pairs.append((moneyness, iv))
 
             except Exception as e:
                 logger.print(f"Error processing voucher {symbol} in IV/Moneyness loop: {type(e).__name__} - {e!r}")
