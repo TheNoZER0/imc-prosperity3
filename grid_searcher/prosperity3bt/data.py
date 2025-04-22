@@ -105,31 +105,6 @@ def has_day_data(file_reader: FileReader, round_num: int, day_num: int) -> bool:
         return file is not None
 
 
-def read_observations(file_reader: FileReader, round_num: int, day_num: int) -> list[ObservationRow]:
-    observations = []
-    with file_reader.file([f"round{round_num}", f"observations_round_{round_num}_day_{day_num}.csv"]) as file:
-        if file is None:
-            return []
-
-        for line in file.read_text(encoding="utf-8").splitlines()[1:]:
-            columns = line.split(",")
-
-            observations.append(
-                ObservationRow(
-                    timestamp=int(columns[0]),
-                    bidPrice=float(columns[1]),
-                    askPrice=float(columns[2]),
-                    transportFees=float(columns[3]),
-                    exportTariff=float(columns[4]),
-                    importTariff=float(columns[5]),
-                    sugarPrice=float(columns[6]),
-                    sunlightIndex=float(columns[7]),
-                )
-            )
-
-    return observations
-
-
 def read_day_data(file_reader: FileReader, round_num: int, day_num: int, no_names: bool) -> BacktestData:
     prices = []
     with file_reader.file([f"round{round_num}", f"prices_round_{round_num}_day_{day_num}.csv"]) as file:
@@ -154,13 +129,8 @@ def read_day_data(file_reader: FileReader, round_num: int, day_num: int, no_name
             )
 
     trades = []
-    trades_suffixes = ["nn"] if no_names else ["wn", "nn"]
-
-    for suffix in trades_suffixes:
-        with file_reader.file([f"round{round_num}", f"trades_round_{round_num}_day_{day_num}_{suffix}.csv"]) as file:
-            if file is None:
-                continue
-
+    with file_reader.file([f"round{round_num}", f"trades_round_{round_num}_day_{day_num}.csv"]) as file:
+        if file is not None:
             for line in file.read_text(encoding="utf-8").splitlines()[1:]:
                 columns = line.split(";")
 
@@ -175,8 +145,23 @@ def read_day_data(file_reader: FileReader, round_num: int, day_num: int, no_name
                     )
                 )
 
-            break
+    observations = []
+    with file_reader.file([f"round{round_num}", f"observations_round_{round_num}_day_{day_num}.csv"]) as file:
+        if file is not None:
+            for line in file.read_text(encoding="utf-8").splitlines()[1:]:
+                columns = line.split(",")
 
-    observations = read_observations(file_reader, round_num, day_num)
+                observations.append(
+                    ObservationRow(
+                        timestamp=int(columns[0]),
+                        bidPrice=float(columns[1]),
+                        askPrice=float(columns[2]),
+                        transportFees=float(columns[3]),
+                        exportTariff=float(columns[4]),
+                        importTariff=float(columns[5]),
+                        sugarPrice=float(columns[6]),
+                        sunlightIndex=float(columns[7]),
+                    )
+                )
 
     return create_backtest_data(round_num, day_num, prices, trades, observations)

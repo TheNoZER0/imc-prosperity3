@@ -16,32 +16,26 @@ def parse_prices(activities_log: str, output_dir: Path, round_day: str) -> None:
 def parse_trades(trade_history: str, output_dir: Path, round_day: str) -> None:
     trades = orjson.loads(trade_history)
 
-    with_names_options = [False]
-    if len(trades) > 0 and len(trades[0]["buyer"]) > 0 and len(trades[0]["seller"]) > 0:
-        with_names_options.append(True)
+    output_file = output_dir / f"trades_{round_day}.csv"
 
-    for with_names in with_names_options:
-        suffix = "wn" if with_names else "nn"
-        output_file = output_dir / f"trades_{round_day}_{suffix}.csv"
+    print(f"Writing trades data to {output_file}")
+    with output_file.open("w+", encoding="utf-8") as f:
+        f.write("timestamp;buyer;seller;symbol;currency;price;quantity\n")
 
-        print(f"Writing trades data to {output_file}")
-        with output_file.open("w+", encoding="utf-8") as f:
-            f.write("timestamp;buyer;seller;symbol;currency;price;quantity\n")
+        for t in trades:
+            row = ";".join(
+                [
+                    str(t["timestamp"]),
+                    t["buyer"],
+                    t["seller"],
+                    t["symbol"],
+                    t["currency"],
+                    str(t["price"]),
+                    str(t["quantity"]),
+                ]
+            )
 
-            for t in trades:
-                row = ";".join(
-                    [
-                        str(t["timestamp"]),
-                        t["buyer"] if with_names else "",
-                        t["seller"] if with_names else "",
-                        t["symbol"],
-                        t["currency"],
-                        str(t["price"]),
-                        str(t["quantity"]),
-                    ]
-                )
-
-                f.write(row + "\n")
+            f.write(row + "\n")
 
 
 def main() -> None:
