@@ -1522,31 +1522,31 @@ class Trader:
 
 
         # 3. Calculate Net Portfolio Delta and Hedge Order
-        current_portfolio_delta = 0.0
-        # Sum delta of existing positions
-        for symbol in voucher_symbols:
-            # Ensure position exists before accessing
-            position = voucher_states[symbol].position if symbol in state.position else 0
-            delta = self.voucher_deltas.get(symbol, 0.0) # Use stored delta
-            current_portfolio_delta += position * delta
+        # current_portfolio_delta = 0.0
+        # # Sum delta of existing positions
+        # for symbol in voucher_symbols:
+        #     # Ensure position exists before accessing
+        #     position = voucher_states[symbol].position if symbol in state.position else 0
+        #     delta = self.voucher_deltas.get(symbol, 0.0) # Use stored delta
+        #     current_portfolio_delta += position * delta
 
-        # Total delta after planned trades
-        total_target_delta = current_portfolio_delta + net_voucher_delta_change
+        # # Total delta after planned trades
+        # total_target_delta = current_portfolio_delta + net_voucher_delta_change
 
-        # Calculate desired hedge position & order quantity
-        target_hedge_position = -round(total_target_delta)
-        current_hedge_position = self.state_volcanic_rock.position
-        hedge_order_qty = target_hedge_position - current_hedge_position
+        # # Calculate desired hedge position & order quantity
+        # target_hedge_position = -round(total_target_delta)
+        # current_hedge_position = self.state_volcanic_rock.position
+        # hedge_order_qty = target_hedge_position - current_hedge_position
 
-        # Apply VOLCANIC_ROCK position limits
-        hedge_limit = self.state_volcanic_rock.position_limit
-        if hedge_order_qty > 0: # Buying hedge
-            hedge_order_qty = min(hedge_order_qty, hedge_limit - current_hedge_position)
-        elif hedge_order_qty < 0: # Selling hedge
-            hedge_order_qty = max(hedge_order_qty, -hedge_limit - current_hedge_position)
+        # # Apply VOLCANIC_ROCK position limits
+        # hedge_limit = self.state_volcanic_rock.position_limit
+        # if hedge_order_qty > 0: # Buying hedge
+        #     hedge_order_qty = min(hedge_order_qty, hedge_limit - current_hedge_position)
+        # elif hedge_order_qty < 0: # Selling hedge
+        #     hedge_order_qty = max(hedge_order_qty, -hedge_limit - current_hedge_position)
 
-        logger.print(f"Delta Hedge: CurrentVoucherDelta={current_portfolio_delta:.2f}, NewTradeDelta={net_voucher_delta_change:.2f}, TargetNetDelta={total_target_delta:.2f}")
-        logger.print(f"Hedge Calc: TargetHedgePos={target_hedge_position}, CurrentHedgePos={current_hedge_position}, OrderQty={hedge_order_qty}")
+        # logger.print(f"Delta Hedge: CurrentVoucherDelta={current_portfolio_delta:.2f}, NewTradeDelta={net_voucher_delta_change:.2f}, TargetNetDelta={total_target_delta:.2f}")
+        # logger.print(f"Hedge Calc: TargetHedgePos={target_hedge_position}, CurrentHedgePos={current_hedge_position}, OrderQty={hedge_order_qty}")
         result["VOLCANIC_ROCK"] = Trade.ema_mean_reversion(self.state_volcanic_rock, alpha=0.2, threshold=12)
         # Create hedge order for VOLCANIC_ROCK if needed
         # if abs(hedge_order_qty) > 0:
