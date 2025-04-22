@@ -1270,11 +1270,11 @@ class Trader:
     voucher_deltas = {}
     
     VOL_PARAMS = {
-        "std_window": 16,
+        "std_window": 45,
         #"mean_volatility": {
            # '9500': 0.129, '9750': 0.159, '10000': 0.149, '10250': 0.138, '10500': 0.142 # Use STRINGS
         #},
-        "zscore_threshold": 2, # default 2
+        "zscore_threshold": 1, # default 2
         "trade_size": 200, # default 20
         "min_iv_history": 10
     }
@@ -1306,9 +1306,9 @@ class Trader:
 
         # Round 2 orders:
         result["PICNIC_BASKET1"] = Trade.basket_1(self.state_picnic1, self.state_jam, self.state_djembes, self.state_croiss)
-        result["JAMS"] = Trade.jams(self.state_jam)
+        #result["JAMS"] = Trade.jams(self.state_jam)
         result["PICNIC_BASKET2"] = Trade.basket_2(self.state_picnic2, self.state_jam, self.state_djembes, self.state_croiss)
-        result["DJEMBES"] = Trade.djmb_crs_pair(self.state_djembes, self.state_croiss)
+        #result["DJEMBES"] = Trade.djmb_crs_pair(self.state_djembes, self.state_croiss)
         result["CROISSANTS"] = Trade.croissant_ema(self.state_croiss)
         # --- Volcanic Strategy (Round 3) ---
         # Define voucher symbols, states, and strikes
