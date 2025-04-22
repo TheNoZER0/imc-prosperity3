@@ -1515,22 +1515,22 @@ class Trader:
         vol_hist: list = traderData["vol_c_t_history"]
         self.macaron_strategy.update_state_from_traderdata(traderData)
 
-        result["RAINFOREST_RESIN"] = Trade.resin(self.state_resin)
-        result["KELP"] = Trade.kelp(self.state_kelp)
-        result["SQUID_INK"] = Trade.ema_mean_reversion(self.state_squink, alpha=0.3, threshold=8)
-        result["PICNIC_BASKET1"] = Trade.basket_1(self.state_picnic1, self.state_jam, self.state_djembes, self.state_croiss)
-        result["JAMS"] = Trade.jams(self.state_jam)
-        result["PICNIC_BASKET2"] = Trade.basket_2(self.state_picnic2, self.state_jam, self.state_djembes, self.state_croiss)
-        pair_orders = Trade.djmb_crs_pair(self.state_djembes, self.state_croiss)
-        if "DJEMBES" not in result: result["DJEMBES"] = []
-        if "CROISSANTS" not in result: result["CROISSANTS"] = []
-        for order in pair_orders:
-             if order.symbol == "DJEMBES":
-                 result["DJEMBES"].append(order)
-        #     elif order.symbol == "CROISSANTS":
-        #         result["CROISSANTS"].append(order)
+        # result["RAINFOREST_RESIN"] = Trade.resin(self.state_resin)
+        # result["KELP"] = Trade.kelp(self.state_kelp)
+        # result["SQUID_INK"] = Trade.ema_mean_reversion(self.state_squink, alpha=0.3, threshold=8)
+        # result["PICNIC_BASKET1"] = Trade.basket_1(self.state_picnic1, self.state_jam, self.state_djembes, self.state_croiss)
+        # result["JAMS"] = Trade.jams(self.state_jam)
+        # result["PICNIC_BASKET2"] = Trade.basket_2(self.state_picnic2, self.state_jam, self.state_djembes, self.state_croiss)
+        # pair_orders = Trade.djmb_crs_pair(self.state_djembes, self.state_croiss)
+        # if "DJEMBES" not in result: result["DJEMBES"] = []
+        # if "CROISSANTS" not in result: result["CROISSANTS"] = []
+        # for order in pair_orders:
+        #      if order.symbol == "DJEMBES":
+        #          result["DJEMBES"].append(order)
+        # #     elif order.symbol == "CROISSANTS":
+        # #         result["CROISSANTS"].append(order)
 
-        croissant_ema_orders = Trade.croissant_ema(state)
+        croissant_ema_orders = Trade.ema_mean_reversion(self.state_croiss, alpha={{alpha}}, threshold={{thresh}})
         if "CROISSANTS" not in result: result["CROISSANTS"] = []
         result["CROISSANTS"].extend(croissant_ema_orders)
 
@@ -1729,13 +1729,13 @@ class Trader:
         # 7. Delta Hedging (Skipped)
 
         # 8. Risk Constraints Check (Limits checked above)
-        result["VOLCANIC_ROCK"] = Trade.ema_mean_reversion(self.state_volcanic_rock, alpha=0.2, threshold=12)
+        #result["VOLCANIC_ROCK"] = Trade.ema_mean_reversion(self.state_volcanic_rock, alpha=0.2, threshold=12)
         # --- Merge Volcanic Orders ---
-        for symbol, orders in volcanic_orders.items():
-             if symbol not in result: result[symbol] = []
-             result[symbol].extend(orders)
+        # for symbol, orders in volcanic_orders.items():
+        #      if symbol not in result: result[symbol] = []
+        #      result[symbol].extend(orders)
 
-        logger.print("--- Finished Volcanic Strategy ---")
+        # logger.print("--- Finished Volcanic Strategy ---")
 
         # # 4.  CAMILLA‑SIGNAL LOGIC FOR PICNIC_BASKET2
         # # -----------------------------------------------------------------
