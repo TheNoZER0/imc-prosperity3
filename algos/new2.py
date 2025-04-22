@@ -1334,7 +1334,7 @@ class Trade:
         return ema
 
     @staticmethod
-    def ema_mean_reversion(squink: Status, alpha=0.15, threshold=14):
+    def ema_mean_reversion(squink: Status, alpha=0.3, threshold=8):
         orders = []
         squink_prc = squink.mid  # This is a float
 
@@ -1368,7 +1368,7 @@ class Trade:
 
         orders = []
         orders.extend(Strategy.arb(state=state, fair_price=current_price))
-        orders.extend(Strategy.mm_glft(state=state, fair_price=current_price, mu = -7.60706813499185e-07, sigma = 7.890239872766339e-05, gamma=1e-9, order_amount=50))
+        orders.extend(Strategy.mm_glft(state=state, fair_price=current_price, mu = -7.60706813499185e-07, sigma = 7.890239872766339e-05, gamma=1e-9, order_amount=10))
 
         return orders
     
@@ -1405,13 +1405,13 @@ class Trade:
 
         history = Trade.mid_price_history[CROISSANTS]
         history.append(current_price)
-        if len(history) > EMA_PERIOD:
+        if len(history) > 8:
             history.pop(0)
             
-        if len(history) < EMA_PERIOD:
+        if len(history) < 8:
             return []
         
-        alpha = 2 / (EMA_PERIOD + 1)
+        alpha = 0.1
         ema = history[0]
         for price in history[1:]:
             ema = alpha * price + (1 - alpha) * ema
@@ -1467,10 +1467,10 @@ class Trader:
     VOL_TRADE_SIZE = 5
     VOL_POSITION_LIMIT_PER_STRIKE = 100 
     VOL_UNDERLYING_POSITION_LIMIT = 300
-    HISTORICAL_MEAN_VOL = 8.5e-6
-    VOL_DIFF_SELL_THRESHOLD = 2.5e-7
-    VOL_DIFF_BUY_THRESHOLD  = -2.5e-7
-    VOL_DIFF_CLOSE_THRESHOLD = 2e-7
+    HISTORICAL_MEAN_VOL = 6.86848484848485e-06
+    VOL_DIFF_SELL_THRESHOLD = 4.3e-07
+    VOL_DIFF_BUY_THRESHOLD  = 1.7e-07
+    VOL_DIFF_CLOSE_THRESHOLD = 1e-07
 
     ## Mac and cheese
     macaron_strategy = MacaronStrategy(logger)
@@ -1518,16 +1518,16 @@ class Trader:
         result["KELP"] = Trade.kelp(self.state_kelp)
         result["SQUID_INK"] = Trade.ema_mean_reversion(self.state_squink)
         result["PICNIC_BASKET1"] = Trade.basket_1(self.state_picnic1, self.state_jam, self.state_djembes, self.state_croiss)
-        # result["JAMS"] = Trade.jams(self.state_jam)
-        #result["PICNIC_BASKET2"] = Trade.basket_2(self.state_picnic2, self.state_jam, self.state_djembes, self.state_croiss)
+        result["JAMS"] = Trade.jams(self.state_jam)
+        result["PICNIC_BASKET2"] = Trade.basket_2(self.state_picnic2, self.state_jam, self.state_djembes, self.state_croiss)
         pair_orders = Trade.djmb_crs_pair(self.state_djembes, self.state_croiss)
         if "DJEMBES" not in result: result["DJEMBES"] = []
         if "CROISSANTS" not in result: result["CROISSANTS"] = []
         for order in pair_orders:
-            if order.symbol == "DJEMBES":
-                result["DJEMBES"].append(order)
-            elif order.symbol == "CROISSANTS":
-                result["CROISSANTS"].append(order)
+             if order.symbol == "DJEMBES":
+                 result["DJEMBES"].append(order)
+        #     elif order.symbol == "CROISSANTS":
+        #         result["CROISSANTS"].append(order)
 
         croissant_ema_orders = Trade.croissant_ema(state)
         if "CROISSANTS" not in result: result["CROISSANTS"] = []
@@ -1536,16 +1536,16 @@ class Trader:
         ### MACARONS
         # --- Run NEW Macaron Strategy ---
         total_conversions = 0
-        try:
-             macaron_orders, macaron_conv_req = self.macaron_strategy.run(self.state_macarons, state.timestamp)
-             result[MACARON_PRODUCT] = macaron_orders
-             total_conversions += macaron_conv_req
-        except Exception as e:
-             self.macaron_strategy.logger.print(f"ERROR in Macaron Strategy: {e}")
-             # Optionally print traceback:
-             # import traceback
-             # self.macaron_strategy.logger.print(traceback.format_exc())
-             result[MACARON_PRODUCT] = [] # Send no orders if error
+        # try:
+        #      macaron_orders, macaron_conv_req = self.macaron_strategy.run(self.state_macarons, state.timestamp)
+        #      result[MACARON_PRODUCT] = macaron_orders
+        #      total_conversions += macaron_conv_req
+        # except Exception as e:
+        #      self.macaron_strategy.logger.print(f"ERROR in Macaron Strategy: {e}")
+        #      # Optionally print traceback:
+        #      # import traceback
+        #      # self.macaron_strategy.logger.print(traceback.format_exc())
+        #      result[MACARON_PRODUCT] = [] # Send no orders if error
 
         # --- New Volcanic Strategy (Round 3 Algorithm - Using List) ---
         volcanic_orders = {}
@@ -1591,7 +1591,7 @@ class Trader:
                 voucher_price = voucher_state.mid
                 if voucher_price is None or voucher_price <= 0: continue
                 r= 0.0
-                iv = implied_volatility(voucher_price, spot_price, K, round_number, current_timestamp, r, tol=1e-4, max_iter=1000)
+                iv = implied_volatility(voucher_price, spot_price, K, round_number, current_timestamp, r, tol=7.08e-05, max_iter=1000)
 
                 if not np.isnan(iv) and iv > 1e-9:
                      if K > 0 and spot_price > 0:
@@ -1735,41 +1735,125 @@ class Trader:
 
         logger.print("--- Finished Volcanic Strategy ---")
 
-        # 4.  CAMILLA‑SIGNAL LOGIC FOR PICNIC_BASKET2
-        # -----------------------------------------------------------------
-        # (a) update from this tick’s market trades
-        for tr in state.market_trades.get("PICNIC_BASKET2", []):
-            if tr.buyer == "Charlie":
-                self.cam_sig_pb2 =  1.5
-            if tr.seller == "Charlie":
-                self.cam_sig_pb2 = -1.5
+        # # 4.  CAMILLA‑SIGNAL LOGIC FOR PICNIC_BASKET2
+        # # -----------------------------------------------------------------
+        # # (a) update from this tick’s market trades
+        # for tr in state.market_trades.get("PICNIC_BASKET2", []):
+        #     if tr.buyer == "Charlie":
+        #         self.cam_sig_pb2 =  1.5
+        #     if tr.seller == "Charlie":
+        #         self.cam_sig_pb2 = -1.5
 
-        # (b) decay the signal
-        self.cam_sig_pb2 *= self.cam_decay
+        # # (b) decay the signal
+        # self.cam_sig_pb2 *= self.cam_decay
 
-        # (c) generate incremental orders when |signal| ≥ threshold
-        pb2_status = self.state_picnic2
-        depth      = state.order_depths["PICNIC_BASKET2"]
+        # # (c) generate incremental orders when |signal| ≥ threshold
+        # pb2_status = self.state_picnic2
+        # depth      = state.order_depths["PICNIC_BASKET2"]
 
-        cam_orders: list[Order] = []
-        if self.cam_sig_pb2 >= self.sig_threshold and depth.sell_orders:
-            price = min(depth.sell_orders)                         # best ask
-            qty   = min(2, pb2_status.possible_buy_amt)            # up to 2
-            if qty > 0:
-                cam_orders.append(Order("PICNIC_BASKET2", price, qty))
+        # cam_orders: list[Order] = []
+        # if self.cam_sig_pb2 >= self.sig_threshold and depth.sell_orders:
+        #     price = min(depth.sell_orders)                         # best ask
+        #     qty   = min(1, pb2_status.possible_buy_amt)            # up to 2
+        #     if qty > 0:
+        #         cam_orders.append(Order("PICNIC_BASKET2", price, qty))
 
-        if self.cam_sig_pb2 <= -self.sig_threshold and depth.buy_orders:
-            price = max(depth.buy_orders)                          # best bid
-            qty   = min(2, pb2_status.possible_sell_amt)           # up to 2
-            if qty > 0:
-                cam_orders.append(Order("PICNIC_BASKET2", price, -qty))
+        # if self.cam_sig_pb2 <= -self.sig_threshold and depth.buy_orders:
+        #     price = max(depth.buy_orders)                          # best bid
+        #     qty   = min(1, pb2_status.possible_sell_amt)           # up to 2
+        #     if qty > 0:
+        #         cam_orders.append(Order("PICNIC_BASKET2", price, -qty))
 
-        #  add Camilla orders to any existing basket‑2 orders
-        result.setdefault("PICNIC_BASKET2", []).extend(cam_orders)
+        # #  add Camilla orders to any existing basket‑2 orders
+        # result.setdefault("PICNIC_BASKET2", []).extend(cam_orders)
         
+        
+        # ### Olivia Squid ink
+        # if not hasattr(self, "_olivia_init"):
+        #     self.olivia_last_dir: float = 0.0     # +1 buy, –1 sell, 0 neutral
+        #     self._olivia_init = True
+
+        # for tr in state.market_trades.get("SQUID_INK", []):
+        #     if tr.buyer == "Olivia":
+        #         self.olivia_last_dir = 1.0
+        #     if tr.seller == "Olivia":
+        #         self.olivia_last_dir = -1.0
+
+        # # if Olivia traded this tick, act immediately; else do nothing
+        # if self.olivia_last_dir != 0.0:
+        #     sq_status = self.state_squink
+        #     depth     = state.order_depths["SQUID_INK"]
+        #     limit     = Status._position_limit["SQUID_INK"]
+        #     current   = state.position.get("SQUID_INK", 0)
+
+        #     target_pos = limit if self.olivia_last_dir > 0 else -limit
+        #     delta      = target_pos - current
+
+        #     if delta > 0 and depth.sell_orders:           # need to BUY
+        #         best_ask = min(depth.sell_orders)
+        #         avail    = -depth.sell_orders[best_ask]
+        #         buy_qty  = min(delta, avail)
+        #         if buy_qty > 0:
+        #             result.setdefault("SQUID_INK", []).append(
+        #                 Order("SQUID_INK", best_ask, buy_qty)
+        #             )
+        #     elif delta < 0 and depth.buy_orders:          # need to SELL
+        #         best_bid = max(depth.buy_orders)
+        #         avail    = depth.buy_orders[best_bid]
+        #         sell_qty = min(-delta, avail)
+        #         if sell_qty > 0:
+        #             result.setdefault("SQUID_INK", []).append(
+        #                 Order("SQUID_INK", best_bid, -sell_qty)
+        #             )
+
+        #     # reset so we only act once per Olivia print
+        #     self.olivia_last_dir = 0.0
+            
+        # ### Olivia Croissants
+        # if not hasattr(self, "_olivia_init"):
+        #     self.olivia_last_dir: float = 0.0     # +1 buy, –1 sell, 0 neutral
+        #     self._olivia_init = True
+
+        # for tr in state.market_trades.get("CROISSANTS", []):
+        #     if tr.buyer == "Olivia":
+        #         self.olivia_last_dir = 1.0
+        #     if tr.seller == "Olivia":
+        #         self.olivia_last_dir = -1.0
+
+        # # if Olivia traded this tick, act immediately; else do nothing
+        # if self.olivia_last_dir != 0.0:
+        #     sq_status = self.state_squink
+        #     depth     = state.order_depths["CROISSANTS"]
+        #     limit     = Status._position_limit["CROISSANTS"]
+        #     current   = state.position.get("CROISSANTS", 0)
+
+        #     target_pos = limit if self.olivia_last_dir > 0 else -limit
+        #     delta      = target_pos - current
+
+        #     if delta > 0 and depth.sell_orders:           # need to BUY
+        #         best_ask = min(depth.sell_orders)
+        #         avail    = -depth.sell_orders[best_ask]
+        #         buy_qty  = min(delta, avail)
+        #         if buy_qty > 0:
+        #             result.setdefault("CROISSANTS", []).append(
+        #                 Order("CROISSANTS", best_ask, buy_qty)
+        #             )
+        #     elif delta < 0 and depth.buy_orders:          # need to SELL
+        #         best_bid = max(depth.buy_orders)
+        #         avail    = depth.buy_orders[best_bid]
+        #         sell_qty = min(-delta, avail)
+        #         if sell_qty > 0:
+        #             result.setdefault("CROISSANTS", []).append(
+        #                 Order("CROISSANTS", best_bid, -sell_qty)
+        #             )
+
+        #     # reset so we only act once per Olivia print
+        #     self.olivia_last_dir = 0.0
+            
+
         
         # --- Final Steps ---
-        self.macaron_strategy.save_state_to_traderdata(traderData)
+        #self.macaron_strategy.save_state_to_traderdata(traderData)
         final_trader_data = ""
         try:
             # Encode traderData (without vol_c_t_history)
