@@ -1422,10 +1422,10 @@ class Trade:
         
         
         orders = []
-        if z_score < -2.5:
+        if z_score < 2.8:
             qty = status.possible_buy_amt
             orders.append(Order(CROISSANTS, int(current_price), qty))
-        elif z_score > 2.5:
+        elif z_score > -2.8:
             qty = status.possible_sell_amt
             orders.append(Order(CROISSANTS, int(current_price), -qty))
             
@@ -1530,7 +1530,7 @@ class Trader:
         # #     elif order.symbol == "CROISSANTS":
         # #         result["CROISSANTS"].append(order)
 
-        croissant_ema_orders = Trade.ema_mean_reversion(self.state_croiss, alpha={{alpha}}, threshold={{thresh}})
+        croissant_ema_orders = Trade.croissant_ema(self.state_croiss)
         if "CROISSANTS" not in result: result["CROISSANTS"] = []
         result["CROISSANTS"].extend(croissant_ema_orders)
 
@@ -1728,7 +1728,7 @@ class Trader:
 
         # 7. Delta Hedging (Skipped)
 
-        # 8. Risk Constraints Check (Limits checked above)
+        # 8. Volcaninc ema
         #result["VOLCANIC_ROCK"] = Trade.ema_mean_reversion(self.state_volcanic_rock, alpha=0.2, threshold=12)
         # --- Merge Volcanic Orders ---
         # for symbol, orders in volcanic_orders.items():

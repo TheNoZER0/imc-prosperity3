@@ -119,10 +119,10 @@ if __name__ == '__main__':
         # "threshold_b1": [i for i in range(40, 75)],
         # "threshold_b2": [i for i in range(20, 60)]
         # "threshold_p": [i for i in range(1,100)]
-        # "cross_z": [i for i in np.arange(0, 3, 0.2)],
+        "cross_z": [i for i in np.arange(0, 3, 0.2)],
         # "cross_ema": [i for i in range(5,100,2)],
         "alpha": [i for i in np.arange(0.1, 1, 0.05)],
-        "thresh": [i for i in np.arange(0,100, 4)]
+        #"thresh": [i for i in np.arange(0,20, 1)]
         #"threshold_volc": [i for i in np.arange(31, 37, 0.05)],
         #"hold": [i for i in range(5, 20, 5)],
         #"arb": [i for i in range(5, 40, 2)],
