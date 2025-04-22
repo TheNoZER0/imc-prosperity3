@@ -1746,7 +1746,7 @@ class Trader:
         # 7. Delta Hedging (Skipped)
 
         # 8. Risk Constraints Check (Limits checked above)
-
+        result["VOLCANIC_ROCK"] = Trade.ema_mean_reversion(self.state_volcanic_rock, alpha=0.15, threshold=14)
         # --- Merge Volcanic Orders ---
         for symbol, orders in volcanic_orders.items():
              if symbol not in result: result[symbol] = []

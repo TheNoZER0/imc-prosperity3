@@ -1334,7 +1334,8 @@ class Trade:
         return ema
 
     @staticmethod
-    def ema_mean_reversion(squink: Status, alpha=0.3, threshold=8):
+    # alpha for squink is 0.1, thresh is 8
+    def ema_mean_reversion(squink: Status, alpha, threshold):
         orders = []
         squink_prc = squink.mid  # This is a float
 
@@ -1346,7 +1347,7 @@ class Trade:
         squink.price_history.append(squink_prc)
         
         # Only compute the EMA if we have enough history (e.g., at least 10 data points)
-        if len(squink.price_history) < 100:
+        if len(squink.price_history) < 10:
             return orders  # or you can decide to simply return no orders
         
         # Convert the price history to a Pandas Series
@@ -1421,10 +1422,10 @@ class Trade:
         
         
         orders = []
-        if z_score < -2.8:
+        if z_score < -2.5:
             qty = status.possible_buy_amt
             orders.append(Order(CROISSANTS, int(current_price), qty))
-        elif z_score > 2.8:
+        elif z_score > 2.5:
             qty = status.possible_sell_amt
             orders.append(Order(CROISSANTS, int(current_price), -qty))
             
@@ -1464,7 +1465,7 @@ class Trader:
     state_volcanic_rock = Status("VOLCANIC_ROCK")
     state_macarons = Status(MACARON_PRODUCT)
 
-    VOL_TRADE_SIZE = 5
+    VOL_TRADE_SIZE = 10
     VOL_POSITION_LIMIT_PER_STRIKE = 100 
     VOL_UNDERLYING_POSITION_LIMIT = 300
     HISTORICAL_MEAN_VOL = 6.86848484848485e-06
@@ -1516,7 +1517,7 @@ class Trader:
 
         result["RAINFOREST_RESIN"] = Trade.resin(self.state_resin)
         result["KELP"] = Trade.kelp(self.state_kelp)
-        result["SQUID_INK"] = Trade.ema_mean_reversion(self.state_squink)
+        result["SQUID_INK"] = Trade.ema_mean_reversion(self.state_squink, alpha=0.3, threshold=8)
         result["PICNIC_BASKET1"] = Trade.basket_1(self.state_picnic1, self.state_jam, self.state_djembes, self.state_croiss)
         result["JAMS"] = Trade.jams(self.state_jam)
         result["PICNIC_BASKET2"] = Trade.basket_2(self.state_picnic2, self.state_jam, self.state_djembes, self.state_croiss)
@@ -1657,13 +1658,14 @@ class Trader:
         # 5. Choose ATM Strike (C_ATM)
         atm_symbol = None
         min_abs_moneyness = float('inf')
-        # Re-calculate moneyness for all strikes just for ATM selection
+
         for symbol in voucher_symbols:
-             K = strikes[symbol]
-             diff = K - spot_price
-             if diff < min_abs_moneyness:
-                 min_abs_moneyness = abs(moneyness)
-                 atm_symbol = symbol
+            K = strikes[symbol]
+            abs_moneyness = abs(K - spot_price)   # proxy for moneyness when √TTE is constant
+
+            if abs_moneyness < min_abs_moneyness:
+                min_abs_moneyness = abs_moneyness
+                atm_symbol = symbol
 
         if atm_symbol:
              logger.print(f"ATM Strike Selected: {atm_symbol} (|m|={min_abs_moneyness:.4f})")
@@ -1727,7 +1729,7 @@ class Trader:
         # 7. Delta Hedging (Skipped)
 
         # 8. Risk Constraints Check (Limits checked above)
-
+        result["VOLCANIC_ROCK"] = Trade.ema_mean_reversion(self.state_volcanic_rock, alpha=0.2, threshold=12)
         # --- Merge Volcanic Orders ---
         for symbol, orders in volcanic_orders.items():
              if symbol not in result: result[symbol] = []
