@@ -1335,7 +1335,7 @@ class Trade:
 
     @staticmethod
     # alpha for squink is 0.1, thresh is 8
-    def ema_mean_reversion(squink: Status, alpha=0.1, threshold=8):
+    def ema_mean_reversion(squink: Status, alpha, threshold):
         orders = []
         squink_prc = squink.mid  # This is a float
 
@@ -1515,24 +1515,24 @@ class Trader:
         vol_hist: list = traderData["vol_c_t_history"]
         self.macaron_strategy.update_state_from_traderdata(traderData)
 
-        #result["RAINFOREST_RESIN"] = Trade.resin(self.state_resin)
-        #result["KELP"] = Trade.kelp(self.state_kelp)
-        result["SQUID_INK"] = Trade.ema_mean_reversion(self.state_squink, alpha={{alpha}}, threshold={{thresh}})
-        #result["PICNIC_BASKET1"] = Trade.basket_1(self.state_picnic1, self.state_jam, self.state_djembes, self.state_croiss)
-        #result["JAMS"] = Trade.jams(self.state_jam)
-        #result["PICNIC_BASKET2"] = Trade.basket_2(self.state_picnic2, self.state_jam, self.state_djembes, self.state_croiss)
-        # pair_orders = Trade.djmb_crs_pair(self.state_djembes, self.state_croiss)
-        # if "DJEMBES" not in result: result["DJEMBES"] = []
-        # if "CROISSANTS" not in result: result["CROISSANTS"] = []
-        # for order in pair_orders:
-        #      if order.symbol == "DJEMBES":
-        #          result["DJEMBES"].append(order)
-        # #     elif order.symbol == "CROISSANTS":
-        # #         result["CROISSANTS"].append(order)
+        result["RAINFOREST_RESIN"] = Trade.resin(self.state_resin)
+        result["KELP"] = Trade.kelp(self.state_kelp)
+        result["SQUID_INK"] = Trade.ema_mean_reversion(self.state_squink, alpha=0.3, threshold=8)
+        result["PICNIC_BASKET1"] = Trade.basket_1(self.state_picnic1, self.state_jam, self.state_djembes, self.state_croiss)
+        result["JAMS"] = Trade.jams(self.state_jam)
+        result["PICNIC_BASKET2"] = Trade.basket_2(self.state_picnic2, self.state_jam, self.state_djembes, self.state_croiss)
+        pair_orders = Trade.djmb_crs_pair(self.state_djembes, self.state_croiss)
+        if "DJEMBES" not in result: result["DJEMBES"] = []
+        if "CROISSANTS" not in result: result["CROISSANTS"] = []
+        for order in pair_orders:
+             if order.symbol == "DJEMBES":
+                 result["DJEMBES"].append(order)
+        #     elif order.symbol == "CROISSANTS":
+        #         result["CROISSANTS"].append(order)
 
-        # croissant_ema_orders = Trade.croissant_ema(state)
-        # if "CROISSANTS" not in result: result["CROISSANTS"] = []
-        # result["CROISSANTS"].extend(croissant_ema_orders)
+        croissant_ema_orders = Trade.croissant_ema(state)
+        if "CROISSANTS" not in result: result["CROISSANTS"] = []
+        result["CROISSANTS"].extend(croissant_ema_orders)
 
         ### MACARONS
         # --- Run NEW Macaron Strategy ---
