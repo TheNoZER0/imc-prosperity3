@@ -4,11 +4,11 @@ The IMC trading competition presented a significant challenge on a simulated exc
 <table>
   <tbody>
     <tr>
-      <td align="center" valign="top" width="14.28%">
+      <td align="center" valign="top" width="16.28%">
         <a href="https://github.com/TheNoZer0" title="Visit GitHub Profile">
           <img src="photos/zain.jpg" 
                alt="Zain Al-Saffi" 
-               style="width: 100px; height: 100px; object-fit: cover; border-radius: 10%;"/>
+               style="width: 100px; height: 100px; object-fit: cover; border-radius: 20%;"/>
           <br />
           <sub><b>Zain Al Saffi</b></sub>
         </a>
@@ -17,7 +17,7 @@ The IMC trading competition presented a significant challenge on a simulated exc
           <a href="https://www.linkedin.com/in/zain-al-saffi-881492250/" title="LinkedIn Profile">🔗 LinkedIn</a>
         </sub>
       </td>
-      <td align="center" valign="top" width="14.28%">
+      <td align="center" valign="top" width="16.28%">
         <a href="https://github.com/ZacKienzle2" title="Visit GitHub Profile">
           <img src="photos/zac.jpeg" 
             alt="Zac Kienzle" 
@@ -30,7 +30,7 @@ The IMC trading competition presented a significant challenge on a simulated exc
           <a href="https://www.linkedin.com/in/zac-kienzle-aba665263/" title="LinkedIn Profile">🔗 LinkedIn</a>
         </sub>
       </td>
-      <td align="center" valign="top" width="14.28%">
+      <td align="center" valign="top" width="16.28%">
         <a href="https://github.com/mashamegul" title="Visit GitHub Profile">
           <img src="photos/masham.jpg" 
             alt="Masham Siddiqui" 
@@ -43,7 +43,7 @@ The IMC trading competition presented a significant challenge on a simulated exc
           <a href="https://www.linkedin.com/in/mashamegul/" title="LinkedIn Profile">🔗 LinkedIn</a>
         </sub>
       </td>
-      <td align="center" valign="top" width="14.28%">
+      <td align="center" valign="top" width="16.28%">
         <a href="https://github.com/roger-y-zhu" title="Visit GitHub Profile">
           <img src="photos/roger.jpg" 
             alt="Roger Zhu" 
@@ -56,7 +56,7 @@ The IMC trading competition presented a significant challenge on a simulated exc
           <a href="https://www.linkedin.com/in/roger-zhu-b279512b5/" title="LinkedIn Profile">🔗 LinkedIn</a>
         </sub>
       </td>
-      <td align="center" valign="top" width="14.28%">
+      <td align="center" valign="top" width="16.28%">
         <a href="https://github.com/AbhinavPradeep" title="Visit GitHub Profile">
           <img src="photos/abhinav.jpg" 
             alt="Roger Zhu" 
