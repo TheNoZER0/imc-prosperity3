@@ -1516,7 +1516,7 @@ class Trader:
         self.macaron_strategy.update_state_from_traderdata(traderData)
 
         # result["RAINFOREST_RESIN"] = Trade.resin(self.state_resin)
-        # result["KELP"] = Trade.kelp(self.state_kelp)
+        result["KELP"] = Trade.kelp(self.state_kelp)
         # result["SQUID_INK"] = Trade.ema_mean_reversion(self.state_squink, alpha=0.3, threshold=8)
         # result["PICNIC_BASKET1"] = Trade.basket_1(self.state_picnic1, self.state_jam, self.state_djembes, self.state_croiss)
         # result["JAMS"] = Trade.jams(self.state_jam)
