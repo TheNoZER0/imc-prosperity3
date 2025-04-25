@@ -6,7 +6,7 @@ The IMC trading competition presented a significant challenge on a simulated exc
     <tr>
       <td align="center" valign="top" width="16.28%">
         <a href="https://github.com/TheNoZer0" title="Visit GitHub Profile">
-          <img src="photos/zain.jpg" 
+          <img src="photos/zain2.jpg" 
                alt="Zain Al-Saffi" 
                style="width: 100px; height: 100px; object-fit: cover; border-radius: 20%;"/>
           <br />
