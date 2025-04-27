@@ -170,6 +170,8 @@ Thus, we pivoted strategies:
 
 We also **deactivated direct trading** on volcanic rock to avoid further losses, though Zain later implemented a new strategy for it in Round 5.
 
+The backtester was starting to slip as well and it was hard to tell if we were overfitting or making profit. Zain developed a visualiser that can take IMC data and run analysis on it to identify which assets were underperforming on the actual IMC sim. 
+
 Meanwhile, Roger, Zac, and Masham gridsearched the parameters for the voucher trading algorithm.  
 This collective effort **netted us a very strong profit**, bringing us back to **4th in Australia** and **69th overall**.
 
