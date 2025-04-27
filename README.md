@@ -94,7 +94,7 @@ Three assets were introduced: SQUID_INK, RAINFOREST_RESIN, and KELP.
 Each exhibited different behaviours in the simulation.
 
   - Rainforest Resin was highly stationary and hovered around a mean of 10,000.
-    We implemented a market-make and market-take strategy based on a GLFT (Generalised Logistic Functional Trading) model.
+    We implemented a market-make and market-take strategy based on a GLFT (Guéant–Lehalle–Fernandez-Tapia) model.
     We also tested an Ornstein-Uhlenbeck process to model the price dynamics but found GLFT was more effective for capturing mean reversion.
 
   - Squid Ink was highly volatile, and we did not fully figure it out in Round 1.
