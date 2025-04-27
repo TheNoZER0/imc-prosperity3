@@ -230,7 +230,7 @@ On the bot analysis side, We identified that **Olivia**, one of the bots, had a 
 In backtesting, following her trades netted positive returns. However, during the live round, Olivia barely traded, rendering the strategy ineffective. The other bots proved too noisy and inconsistent to extract reliable signals within the available time.
 
 Despite improving our algorithmic strategies, we suffered a setback in manual trading.  
-We miscalculated some of the RED FLAGS cases, costing us significant money. Our final algorithm iS in `new2.py`
+We miscalculated some of the RED FLAGS cases, costing us significant money.
 
 In the end, we finished:
 - **9th in Australia overall**
