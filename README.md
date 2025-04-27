@@ -143,7 +143,7 @@ As a fallback, we ended up using:
 Round 3 saw the introduction of `VOLCANIC_ROCK` and its vouchers at five different strike prices.  
 This resembled a classic options pricing environment.
 
-After seeing our placement drop in Round 2, we decided to lock in harder, Zain was also so mad at the result he cancelled his Vivcourt 3rd round interview. 
+After seeing our placement drop in Round 2, we decided to lock in harder, Zain was also so mad at the result he cancelled his Vivcourt 3rd round interview and HRT coding interview. 
 
 
 During Round 3, Zain pushed himself too hard and was consequently hospitalised late at night with an irregular heart rhythm and chest pains.  
