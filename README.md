@@ -201,7 +201,7 @@ Initially, we built a dynamic market-making and adaptive trading strategy for ma
 In hindsight, we should have stripped the strategy down entirely.  
 The forced conversion made the payoff profile asymmetric — it gave a false sense of security when in reality, the correct trade was to buy from pristine when the markets were favourable or overpriced in the local archipalego.
 
-Because of extreme time pressure this round, Zain’s health condition deteriorating further, and Masham suffering an eye infection that made it difficult to see, we were unable to fully pivot the strategy in time.  
+Because of extreme time pressure this round, Zain’s health condition deteriorating further, Masham suffering an eye infection that made it difficult to see, and Roger going on holiday, we were unable to fully pivot the strategy in time.  
 However, due to the strength of our other asset strategies, we still maintained **4th place in Australia** and climbed to **54th overall**.
 
 Manual trading was another major factor:  
