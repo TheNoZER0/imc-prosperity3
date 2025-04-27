@@ -143,7 +143,7 @@ As a fallback, we ended up using:
 Round 3 saw the introduction of `VOLCANIC_ROCK` and its vouchers at five different strike prices.  
 This resembled a classic options pricing environment.
 
-After seeing our placement drop in Round 2, we decided to lock in harder. During Round 3, Zain pushed himself so hard that he was hospitalised late at night with an irregular heart rhythm and chest pains.  
+After seeing our placement drop in Round 2, we decided to lock in harder, Zain was also so mad at the result he cancelled his Vivcourt 3rd round interview. During Round 3, Zain pushed himself so hard that he was hospitalised late at night with an irregular heart rhythm and chest pains.  
 Even while being admitted, he brought his laptop to the hospital and kept working on the competition. While waiting for tests and treatment, he was reading options theory books to sharpen his understanding and improve our strategies.
 
 Doctors warned him that continuing would risk serious long-term health issues.  
