@@ -223,7 +223,7 @@ During this process, Zain discovered something almost by accident:
 
 If you simply ran an EMA (Exponential Moving Average) on `VOLCANIC_ROCK`, it could generate massive profits.  
 This realisation was game-changing, it propelled our backtested profits from **$150k to over $1 million**.  
-It became one of the core drivers of our performance in the final round. Roger's and Masham were tackling `MAGNIFICENT_MACARONS` however we were not able to figure out exactly how the conversions worked, and shifted to fine tuning all the other strategies. Roger's gridsearch was the best invention to come out of the competition, as it saved us a lot of time and effort. If there was an MVP it would be the gridsearcher.
+It became one of the core drivers of our performance in the final round. Roger and Masham were tackling `MAGNIFICENT_MACARONS` however we were not able to figure out exactly how the conversions worked, and shifted to fine tuning all the other strategies. Roger's gridsearch was the best invention to come out of the competition, as it saved us a lot of time and effort. If there was an MVP it would be the gridsearcher.
 
 On the bot analysis side, We identified that **Olivia**, one of the bots, had a strong buy and sell signal pattern, particularly around `CROISSANTS` and `SQUID_INK`.  
 
