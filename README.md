@@ -75,7 +75,7 @@ The IMC trading competition presented a significant challenge on a simulated exc
 
 
 ### Results
-| Round | Overall Position | Manual      | Algorithmic | Country |
+| Round | Overall Position | Manual      | Algorithmic | Country (Australia) |
 |-------|------------------|-------------|-------------|---------|
 | 1     | 268              | Tied 1st    | 300         | 10th    |
 | 2     | 467              | 966         | 516         | 23rd    |
