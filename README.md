@@ -147,11 +147,9 @@ After seeing our placement drop in Round 2, we decided to lock in harder, Zain w
 
 
 During Round 3, Zain pushed himself so hard that he was hospitalised late at night with an irregular heart rhythm and chest pains.  
-Even while being admitted, he brought his laptop to the hospital and kept working on the competition. While waiting for tests and treatment, he was reading options theory books to sharpen his understanding and improve our strategies.
+Even while being admitted, he brought his laptop to the hospital and kept working on the competition. While waiting for tests and treatment, he was reading options theory books to be able to help implement the strategies. Doctors warned him that continuing at his current pace would risk developing serious long-term health issues.  
 
-Doctors warned him that continuing would risk serious long-term health issues.  
-
-However he made the decision that losing the competition would hurt more than anything his body was going through despite persuation from his parents and peers to stop. Quitting was not considered.  Even when symptoms worsened and he passed out multiple times, he kept contributing to the team's work. He accepted the consequences because, at that moment, winning mattered more than anything else.
+However due to his competitive nature, he made the decision that losing the competition would hurt more than what his body was going through despite persuation from his parents and peers to stop. Even when symptoms worsened and he passed out multiple times, he kept contributing to the team's work. He accepted the consequences because, at that moment, winning mattered more than anything else.
 
 
 <div align="center">
