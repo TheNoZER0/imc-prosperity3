@@ -1,4 +1,4 @@
-# Tropical TyGoon Submission
+# TROPICAL TYGOON Submission
 The IMC trading competition presented a significant challenge on a simulated exchange, focused on developing effective Python trading strategies (with a cash prize). For this, we assembled a team by drawing talent from the top students of our respective cohorts, ensuring we possessed the specific capabilities required to perform. Our collective effort led to us emerging as the highest ranked team from UQ and achieving a position within the top 0.4% of all competitors.
 ## The Avengers
 <table>
