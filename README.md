@@ -197,8 +197,6 @@ Initially, we built a dynamic market-making and adaptive trading strategy for ma
 - Implement aggressive "taking" logic when market prices significantly misaligned with fair value,
 - Automatically request conversions when needed to manage risk near expiry.
 
-Despite the sophistication of the model, in practice, the optimal strategy was much simpler:  
-**short macarons consistently and avoid getting trapped long.**
 
 In hindsight, we should have stripped the strategy down entirely.  
 The forced conversion made the payoff profile asymmetric — it gave a false sense of security when in reality, the correct trade was to buy from pristine when the markets were favourable or overpriced in the local archipalego.
