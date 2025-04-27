@@ -1,5 +1,5 @@
 # TROPICAL TYGOON Submission
-The IMC trading competition presented a significant challenge on a simulated exchange, focused on developing effective Python trading strategies (with a cash prize). For this, we assembled a team by drawing talent from the top students of our respective cohorts, ensuring we possessed the specific capabilities required to perform. Our collective effort led to us emerging as the highest ranked team from UQ and achieving a position within the top 0.4% of all competitors.
+The IMC trading competition presented a significant challenge on a simulated exchange, focused on developing effective Python trading strategies (with a cash prize). For this, we assembled a team by drawing talent from the top students of our respective cohorts, ensuring we possessed the specific capabilities required to perform. Our collective effort led to us emerging as the highest ranked team from UQ and achieving a position within the top 0.4% of all competitors. Algorithms can be found in algos folder, where new2.py is the latest. Analysis notebooks and visualiser can be found in the analysis folder.
 ## The Avengers
 <table>
   <tbody>
@@ -232,7 +232,7 @@ On the bot analysis side, We identified that **Olivia**, one of the bots, had a 
 In backtesting, following her trades netted positive returns. However, during the live round, Olivia barely traded, rendering the strategy ineffective. The other bots proved too noisy and inconsistent to extract reliable signals within the available time.
 
 Despite improving our algorithmic strategies, we suffered a setback in manual trading.  
-We miscalculated some of the RED FLAGS cases, costing us significant money. Our final algorithm in in `new2.py`
+We miscalculated some of the RED FLAGS cases, costing us significant money. Our final algorithm iS in `new2.py`
 
 In the end, we finished:
 - **9th in Australia overall**
