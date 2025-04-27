@@ -124,7 +124,7 @@ Thus, our Round 2 submission shifted to a **regime-switching strategy**:
 - Only switching to basket trading when clear arbitrage appeared.
 
 Unfortunately, this approach netted us **less profit**, contributing to a drop in placement.  
-Manual trades also suffered due to miscalculations, discussed further below.
+Manual trades also suffered due to miscalculations, choosing two containers was not as profitable as just one because of the crowding effect. The noisy participants gravitated towards the top 2 containers, and those that chose the second best option made a lot of money. We learnt this for round 4.
 
 Later, after Zain spoke to his friend James (an incoming graduate trader at IMC), we learned that **basket trading** was not the correct framework.  
 Because you could not "create and redeem" baskets like ETFs, it **was not true basket arbitrage** — it was actually **pairs trading**.
@@ -159,7 +159,7 @@ However he made the decision that losing the competition would hurt more than an
 
 ---
 
-Our **initial approach** was to use the **Black-Scholes model** and **delta hedge** the options.  
+Our **initial approach** was to use the **Black-Scholes model** and **delta hedge** the options. Since the options could not be exercised and they were not going to expire before the end of the competition (which was very weird from IMC).
 However, we found a major issue:  
 if you held a strong position in the options and tried to hedge by trading the underlying asset (`VOLCANIC_ROCK`), it would **move the underlying price**, causing significant losses.
 
@@ -230,7 +230,7 @@ On the bot analysis side, We identified that **Olivia**, one of the bots, had a 
 In backtesting, following her trades netted positive returns. However, during the live round, Olivia barely traded, rendering the strategy ineffective. The other bots proved too noisy and inconsistent to extract reliable signals within the available time.
 
 Despite improving our algorithmic strategies, we suffered a setback in manual trading.  
-We miscalculated some of the RED FLAGS cases, costing us significant money.
+We miscalculated some of the RED FLAGS cases, costing us significant money. Our final algorithm in in `new2.py`
 
 In the end, we finished:
 - **9th in Australia overall**
