@@ -1,5 +1,5 @@
 # TROPICAL TYGOON Submission
-The IMC trading competition presented a significant challenge on a simulated exchange, focused on developing effective Python trading strategies (with a cash prize). For this, we assembled a team by drawing talent from the top students of our respective cohorts, ensuring we possessed the specific capabilities required to perform. Our collective effort led to us emerging as the highest ranked team from UQ and Queensland and achieving a position within the top 0.4% of all competitors. Algorithms can be found in algos folder, where new2.py is the latest. Analysis notebooks and visualiser can be found in the analysis folder.
+The IMC trading competition presented a significant challenge on a simulated exchange, focused on developing effective Python trading strategies (with a cash prize). For this, we assembled a team by drawing talent from the top students of our respective cohorts, ensuring we possessed the specific capabilities required to perform. Our collective effort led to us emerging as the highest ranked team from UQ and Queensland and achieving a position within the top 0.6% of all competitors. Algorithms can be found in algos folder, where new2.py is the latest. Analysis notebooks and visualiser can be found in the analysis folder.
 ## The Avengers
 <table>
   <tbody>
